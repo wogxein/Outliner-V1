@@ -56,6 +56,8 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -500,6 +502,28 @@ fun MainOutlinerScreen(
                     )
                 )
             },
+            floatingActionButton = {
+                val isNotesOverview = currentView is AppView.AllNotes || currentView is AppView.FolderView || currentView is AppView.Favorites || currentView is AppView.Recent
+                if (isNotesOverview) {
+                    FloatingActionButton(
+                        onClick = {
+                            val fId = if (currentView is AppView.FolderView) (currentView as AppView.FolderView).folderId else null
+                            viewModel.createNote(folderId = fId)
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "New Note",
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+            },
             bottomBar = {
                 if (currentView is AppView.Editor && activeNote != null) {
                     OutlinerToolbar(
@@ -598,6 +622,9 @@ fun MainOutlinerScreen(
                                                 audioController = viewModel.audioController,
                                                 onTextChange = { newText ->
                                                     viewModel.updateItemText(node.item.id, newText)
+                                                },
+                                                onSplitItem = { before, after ->
+                                                    viewModel.splitItem(node.item.id, before, after)
                                                 },
                                                 onAddSiblingAfter = {
                                                     viewModel.addSiblingItem(node.item.id)
@@ -814,13 +841,6 @@ fun MainOutlinerScreen(
                 Toast.makeText(context, "Plain text copied to clipboard", Toast.LENGTH_SHORT).show()
                 showExportDialog = false
             },
-            onExportHtml = {
-                val html = viewModel.getHtmlExport()
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Note HTML", html))
-                Toast.makeText(context, "HTML exported & copied to clipboard", Toast.LENGTH_SHORT).show()
-                showExportDialog = false
-            },
             onExportOpml = {
                 val opml = viewModel.getOpmlExport()
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -886,7 +906,6 @@ private fun MoveNoteDialog(
 private fun ExportNoteDialog(
     noteTitle: String,
     onExportPlainText: () -> Unit,
-    onExportHtml: () -> Unit,
     onExportOpml: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -901,12 +920,7 @@ private fun ExportNoteDialog(
                 OutlinedButton(onClick = onExportPlainText, modifier = Modifier.fillMaxWidth()) {
                     Text("Plain Text (Indented Outline)")
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedButton(onClick = onExportHtml, modifier = Modifier.fillMaxWidth()) {
-                    Text("Formatted HTML (Web View)")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 OutlinedButton(onClick = onExportOpml, modifier = Modifier.fillMaxWidth()) {
                     Text("OPML (Dynalist / OmniOutliner / Workflowy)")

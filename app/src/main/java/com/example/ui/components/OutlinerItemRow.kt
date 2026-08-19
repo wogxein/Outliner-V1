@@ -2,10 +2,8 @@ package com.example.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,15 +19,15 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -50,14 +48,16 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.domain.model.OutlineItem
 import com.example.domain.model.TreeItemNode
 import com.example.media.AudioPlayerController
 
@@ -70,6 +70,7 @@ fun OutlinerItemRow(
     isCurrentEditing: Boolean,
     audioController: AudioPlayerController,
     onTextChange: (String) -> Unit,
+    onSplitItem: (String, String) -> Unit,
     onAddSiblingAfter: () -> Unit,
     onAddChild: () -> Unit,
     onIndent: () -> Unit,
@@ -89,12 +90,26 @@ fun OutlinerItemRow(
     var showContextMenu by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
 
+    // Maintain local TextFieldValue to avoid Compose cursor reset and typing inversion bug
+    var textFieldValue by remember(item.id) {
+        mutableStateOf(TextFieldValue(text = item.text, selection = TextRange(item.text.length)))
+    }
+
+    LaunchedEffect(item.text) {
+        if (item.text != textFieldValue.text) {
+            textFieldValue = textFieldValue.copy(
+                text = item.text,
+                selection = TextRange(item.text.length)
+            )
+        }
+    }
+
     LaunchedEffect(isCurrentEditing) {
         if (isCurrentEditing) {
             try {
                 focusRequester.requestFocus()
             } catch (e: Exception) {
-                // Focus request fallback
+                // Focus fallback
             }
         }
     }
@@ -149,7 +164,7 @@ fun OutlinerItemRow(
                     showContextMenu = true
                 }
             )
-            .padding(vertical = 3.dp, horizontal = 8.dp),
+            .padding(vertical = 4.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.Top
     ) {
         // Multi-select Checkbox if in multi-select mode
@@ -199,7 +214,7 @@ fun OutlinerItemRow(
             if (node.hasChildren) {
                 Icon(
                     imageVector = if (node.isCollapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
-                    contentDescription = if (node.isCollapsed) "Expand (${node.directChildrenCount})" else "Collapse",
+                    contentDescription = if (node.isCollapsed) "Expand" else "Collapse",
                     tint = if (node.isCollapsed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
                 )
@@ -245,11 +260,22 @@ fun OutlinerItemRow(
                     .padding(horizontal = if (backgroundColor != Color.Transparent) 6.dp else 0.dp, vertical = 2.dp)
             ) {
                 BasicTextField(
-                    value = item.text,
-                    onValueChange = onTextChange,
+                    value = textFieldValue,
+                    onValueChange = { newTfv ->
+                        if (newTfv.text.contains('\n')) {
+                            val newlineIdx = newTfv.text.indexOf('\n')
+                            val before = newTfv.text.substring(0, newlineIdx)
+                            val after = newTfv.text.substring(newlineIdx + 1)
+                            textFieldValue = TextFieldValue(text = before, selection = TextRange(before.length))
+                            onSplitItem(before, after)
+                        } else {
+                            textFieldValue = newTfv
+                            onTextChange(newTfv.text)
+                        }
+                    },
                     textStyle = textStyle,
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    keyboardOptions = KeyboardOptions.Default,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                     keyboardActions = KeyboardActions(
                         onDone = { onAddSiblingAfter() }
                     ),
@@ -263,7 +289,12 @@ fun OutlinerItemRow(
                         }
                         .onPreviewKeyEvent { event ->
                             if (event.key == Key.Enter) {
-                                onAddSiblingAfter()
+                                val currentText = textFieldValue.text
+                                val cursor = textFieldValue.selection.start
+                                val before = if (cursor in 0..currentText.length) currentText.substring(0, cursor) else currentText
+                                val after = if (cursor in 0..currentText.length) currentText.substring(cursor) else ""
+                                textFieldValue = TextFieldValue(text = before, selection = TextRange(before.length))
+                                onSplitItem(before, after)
                                 true
                             } else if (event.key == Key.Tab) {
                                 onIndent()
@@ -273,7 +304,7 @@ fun OutlinerItemRow(
                             }
                         },
                     decorationBox = { innerTextField ->
-                        if (item.text.isEmpty()) {
+                        if (textFieldValue.text.isEmpty()) {
                             Text(
                                 text = "Empty item",
                                 style = textStyle.copy(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
@@ -296,23 +327,25 @@ fun OutlinerItemRow(
             }
         }
 
-        // Collapsed indicator badge (e.g. +3 items)
-        if (node.hasChildren && node.isCollapsed) {
+        // Expand / Collapse (+ / -) button on the right for outline lines with children
+        if (node.hasChildren) {
             Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(6.dp),
+                color = if (node.isCollapsed) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
-                    .padding(start = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .padding(start = 6.dp)
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(6.dp))
                     .clickable { onToggleCollapsed() }
             ) {
-                Text(
-                    text = "${node.totalDescendantsCount}",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (node.isCollapsed) Icons.Default.Add else Icons.Default.Remove,
+                        contentDescription = if (node.isCollapsed) "Expand items" else "Unexpand items",
+                        tint = if (node.isCollapsed) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
 

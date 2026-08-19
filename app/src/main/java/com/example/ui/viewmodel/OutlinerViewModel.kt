@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
@@ -12,8 +13,7 @@ import com.example.domain.model.Tag
 import com.example.domain.model.TreeItemNode
 import com.example.domain.repository.OutlinerRepository
 import com.example.domain.tree.TreeOperations
-import com.example.export.DatabaseBackupManager
-import com.example.export.HtmlExporter
+import com.example.export.MarkdownZipExporter
 import com.example.export.OpmlExporter
 import com.example.export.OpmlImporter
 import com.example.export.PlainTextExporter
@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Stack
 import java.util.UUID
 
@@ -54,6 +56,16 @@ class OutlinerViewModel(
 ) : AndroidViewModel(application) {
 
     val audioController = AudioPlayerController(application)
+
+    // Theme Management (Light / Dark only)
+    private val prefs = application.getSharedPreferences("outliner_prefs", Context.MODE_PRIVATE)
+    private val _isDarkTheme = MutableStateFlow(prefs.getBoolean("is_dark_theme", false))
+    val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
+
+    fun setDarkTheme(isDark: Boolean) {
+        _isDarkTheme.value = isDark
+        prefs.edit().putBoolean("is_dark_theme", isDark).apply()
+    }
 
     // Navigation State
     private val _currentView = MutableStateFlow<AppView>(AppView.AllNotes)
@@ -147,15 +159,9 @@ class OutlinerViewModel(
     private var searchDebounceJob: Job? = null
 
     init {
-        // Touch first note or initialize if empty
-        viewModelScope.launch {
-            delay(200)
-            val currentNotes = repository.getAllNotesForBackup().filter { !it.isDeleted }
-            if (currentNotes.isNotEmpty()) {
-                val mostRecent = currentNotes.maxByOrNull { it.lastAccessedAt } ?: currentNotes.first()
-                openNote(mostRecent.id)
-            }
-        }
+        // App starts on "All Notes" view by default
+        _currentView.value = AppView.AllNotes
+        _activeNoteId.value = null
     }
 
     // ================= NAVIGATION ================= //
@@ -383,6 +389,18 @@ class OutlinerViewModel(
         recordSnapshot(currentItems)
 
         val (updatedList, newItem) = TreeOperations.addSiblingAfter(currentItems, afterItemId, noteId)
+        _activeEditingItemId.value = newItem.id
+        viewModelScope.launch {
+            repository.saveAllItems(noteId, updatedList)
+        }
+    }
+
+    fun splitItem(itemId: String, textBefore: String, textAfter: String) {
+        val noteId = _activeNoteId.value ?: return
+        val currentItems = outlineItems.value
+        recordSnapshot(currentItems)
+
+        val (updatedList, newItem) = TreeOperations.splitItem(currentItems, itemId, textBefore, textAfter, noteId)
         _activeEditingItemId.value = newItem.id
         viewModelScope.launch {
             repository.saveAllItems(noteId, updatedList)
@@ -711,16 +729,24 @@ class OutlinerViewModel(
         return PlainTextExporter.exportToPlainText(note, items)
     }
 
-    fun getHtmlExport(): String {
-        val note = activeNote.value ?: return ""
-        val items = outlineItems.value
-        return HtmlExporter.exportToHtml(note, items)
-    }
-
     fun getOpmlExport(): String {
         val note = activeNote.value ?: return ""
         val items = outlineItems.value
         return OpmlExporter.exportToOpml(note, items)
+    }
+
+    suspend fun exportAllNotesAsZip(context: Context): File? = withContext(Dispatchers.IO) {
+        try {
+            val folders = repository.getAllFoldersForBackup()
+            val notes = repository.getAllNotesForBackup().filter { !it.isDeleted }
+            val allItems = repository.getAllItemsForBackup()
+            val itemsMap = allItems.groupBy { it.noteId }
+
+            MarkdownZipExporter.createZipFile(context, folders, notes, itemsMap)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
     }
 
     fun importOpmlContent(opmlXml: String, folderId: String? = null) {
@@ -735,40 +761,6 @@ class OutlinerViewModel(
                 openNote(newNoteId)
             } catch (e: Exception) {
                 _userMessage.emit("Failed to import OPML: ${e.localizedMessage}")
-            }
-        }
-    }
-
-    suspend fun getFullDatabaseBackupJson(): String {
-        return DatabaseBackupManager.createBackupJson(repository)
-    }
-
-    fun restoreDatabaseJson(jsonString: String, replaceExisting: Boolean) {
-        viewModelScope.launch {
-            try {
-                val parseResult = DatabaseBackupManager.parseBackupJson(jsonString)
-                if (parseResult.isSuccess) {
-                    val data = parseResult.getOrThrow()
-                    repository.restoreDatabase(
-                        folders = data.folders,
-                        notes = data.notes,
-                        items = data.items,
-                        tags = data.tags,
-                        crossRefs = data.crossRefs,
-                        replaceExisting = replaceExisting
-                    )
-                    _userMessage.emit("Database restored successfully (${data.notes.size} notes)")
-                    val remaining = repository.getAllNotesForBackup().filter { !it.isDeleted }
-                    if (remaining.isNotEmpty()) {
-                        openNote(remaining.first().id)
-                    } else {
-                        _currentView.value = AppView.AllNotes
-                    }
-                } else {
-                    _userMessage.emit("Backup file is invalid: ${parseResult.exceptionOrNull()?.localizedMessage}")
-                }
-            } catch (e: Exception) {
-                _userMessage.emit("Restore failed: ${e.localizedMessage}")
             }
         }
     }

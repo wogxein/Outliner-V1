@@ -374,6 +374,44 @@ object TreeOperations {
     }
 
     /**
+     * Splits an item at the given cursor position when Enter is pressed,
+     * placing the remaining text into a new sibling item.
+     */
+    fun splitItem(
+        items: List<OutlineItem>,
+        itemId: String,
+        textBefore: String,
+        textAfter: String,
+        noteId: String
+    ): Pair<List<OutlineItem>, OutlineItem> {
+        val target = items.find { it.id == itemId }
+        val parentId = target?.parentId
+        val insertOrder = (target?.sortOrder ?: -1) + 1
+        val newItemId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+
+        val updatedItems = items.map {
+            when {
+                it.id == itemId -> it.copy(text = textBefore, updatedAt = now)
+                it.parentId == parentId && it.sortOrder >= insertOrder -> it.copy(sortOrder = it.sortOrder + 1)
+                else -> it
+            }
+        }.toMutableList()
+
+        val newItem = OutlineItem(
+            id = newItemId,
+            noteId = noteId,
+            parentId = parentId,
+            sortOrder = insertOrder,
+            text = textAfter,
+            createdAt = now,
+            updatedAt = now
+        )
+        updatedItems.add(newItem)
+        return Pair(updatedItems, newItem)
+    }
+
+    /**
      * Adds a new child to a parent item.
      */
     fun addChildItem(items: List<OutlineItem>, parentItemId: String, noteId: String): Pair<List<OutlineItem>, OutlineItem> {
