@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
@@ -9,14 +10,16 @@ import com.example.domain.model.Folder
 import com.example.domain.model.Note
 import com.example.domain.model.OutlineItem
 import com.example.domain.model.SearchResult
-import com.example.domain.model.Tag
 import com.example.domain.model.TreeItemNode
 import com.example.domain.repository.OutlinerRepository
 import com.example.domain.tree.TreeOperations
 import com.example.export.MarkdownZipExporter
 import com.example.export.OpmlExporter
 import com.example.export.OpmlImporter
+import com.example.export.OpmlZipExporter
 import com.example.export.PlainTextExporter
+import com.example.importer.MarkdownImporter
+import com.example.importer.ZipImporter
 import com.example.media.AudioPlayerController
 import com.example.media.MediaRecognizer
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +50,6 @@ sealed class AppView {
     object Recent : AppView()
     object Trash : AppView()
     object Settings : AppView()
-    data class TagFilter(val tagName: String) : AppView()
 }
 
 class OutlinerViewModel(
@@ -124,9 +126,6 @@ class OutlinerViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val deletedNotes: StateFlow<List<Note>> = repository.deletedNotes
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val allTags: StateFlow<List<Tag>> = repository.allTags
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Active Note Details Flow
@@ -721,6 +720,29 @@ class OutlinerViewModel(
         }
     }
 
+    fun deleteEmptyItemAndFocusPrevious(itemId: String) {
+        val noteId = _activeNoteId.value ?: return
+        val currentItems = outlineItems.value
+        val flatNodes = flattenedTree.value
+        val currentIndex = flatNodes.indexOfFirst { it.item.id == itemId }
+
+        if (currentIndex > 0) {
+            val prevNode = flatNodes[currentIndex - 1]
+            val nodeToDelete = flatNodes[currentIndex]
+
+            if (!nodeToDelete.hasChildren) {
+                recordSnapshot(currentItems)
+                val updated = TreeOperations.deleteSubtree(currentItems, itemId)
+                _activeEditingItemId.value = prevNode.item.id
+                viewModelScope.launch {
+                    repository.saveAllItems(noteId, updated)
+                }
+            } else {
+                _activeEditingItemId.value = prevNode.item.id
+            }
+        }
+    }
+
     // ================= IMPORT / EXPORT ================= //
 
     fun getPlainTextExport(): String {
@@ -746,6 +768,47 @@ class OutlinerViewModel(
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        }
+    }
+
+    suspend fun exportAllNotesAsOpmlZip(context: Context): File? = withContext(Dispatchers.IO) {
+        try {
+            val folders = repository.getAllFoldersForBackup()
+            val notes = repository.getAllNotesForBackup().filter { !it.isDeleted }
+            val allItems = repository.getAllItemsForBackup()
+            val itemsMap = allItems.groupBy { it.noteId }
+
+            OpmlZipExporter.createZipFile(context, folders, notes, itemsMap)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun importZipArchive(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val result = ZipImporter.importZip(context, uri, repository)
+                _userMessage.emit("Imported ${result.notesCount} notes and ${result.foldersCount} folders from ZIP")
+            } catch (e: Exception) {
+                _userMessage.emit("Failed to import ZIP: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun importMarkdownContent(mdText: String, folderId: String? = null) {
+        viewModelScope.launch {
+            try {
+                val tempNoteId = UUID.randomUUID().toString()
+                val parsed = MarkdownImporter.parseMarkdown(mdText, tempNoteId)
+                val newNoteId = repository.createNote(parsed.title, folderId)
+                val itemsWithCorrectId = parsed.items.map { it.copy(noteId = newNoteId) }
+                repository.saveAllItems(newNoteId, itemsWithCorrectId)
+                _userMessage.emit("Imported \"${parsed.title}\" (${itemsWithCorrectId.size} items)")
+                openNote(newNoteId)
+            } catch (e: Exception) {
+                _userMessage.emit("Failed to import Markdown: ${e.localizedMessage}")
+            }
         }
     }
 

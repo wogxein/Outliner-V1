@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,7 +17,6 @@ import androidx.compose.material.icons.automirrored.filled.FormatIndentDecrease
 import androidx.compose.material.icons.automirrored.filled.FormatIndentIncrease
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckBox
@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.FormatStrikethrough
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,11 +50,8 @@ import com.example.domain.model.OutlineItem
 @Composable
 fun OutlinerToolbar(
     activeItem: OutlineItem?,
-    isMultiSelect: Boolean,
-    selectedCount: Int,
     canUndo: Boolean,
     canRedo: Boolean,
-    onAddSibling: () -> Unit,
     onAddChild: () -> Unit,
     onIndent: () -> Unit,
     onUnindent: () -> Unit,
@@ -94,31 +90,8 @@ fun OutlinerToolbar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                // Multi-select indicator
-                if (isMultiSelect) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text(
-                            text = "$selectedCount selected",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-
-                // Add Item Buttons
-                ToolbarIconButton(
-                    icon = Icons.Default.Add,
-                    contentDescription = "Add Sibling Item",
-                    onClick = onAddSibling
-                )
-
-                if (activeItem != null && !isMultiSelect) {
+                // Add Sub-item (Child)
+                if (activeItem != null) {
                     ToolbarIconButton(
                         icon = Icons.Default.SubdirectoryArrowRight,
                         contentDescription = "Add Sub-item",
@@ -214,7 +187,7 @@ fun OutlinerToolbar(
                 )
 
                 // Focus Zoom
-                if (activeItem != null && !isMultiSelect) {
+                if (activeItem != null) {
                     ToolbarIconButton(
                         icon = Icons.Default.ZoomIn,
                         contentDescription = "Zoom / Focus into Subtree",
@@ -252,13 +225,6 @@ fun OutlinerToolbar(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun Column(modifier: Modifier, content: @Composable () -> Unit) {
-    androidx.compose.foundation.layout.Column(modifier = modifier) {
-        content()
     }
 }
 

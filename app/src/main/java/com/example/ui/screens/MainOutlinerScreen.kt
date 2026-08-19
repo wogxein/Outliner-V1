@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
@@ -45,7 +46,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -88,7 +88,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -129,7 +131,6 @@ fun MainOutlinerScreen(
     val activeEditingItemId by viewModel.activeEditingItemId.collectAsState()
     val folders by viewModel.folders.collectAsState()
     val notes by viewModel.notes.collectAsState()
-    val allTags by viewModel.allTags.collectAsState()
 
     val canUndo by viewModel.canUndo.collectAsState()
     val canRedo by viewModel.canRedo.collectAsState()
@@ -143,11 +144,9 @@ fun MainOutlinerScreen(
     var showLinkDialog by remember { mutableStateOf(false) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var parentFolderForNewDialog by remember { mutableStateOf<String?>(null) }
-    var showRenameNoteDialog by remember { mutableStateOf(false) }
     var showRenameFolderDialog by remember { mutableStateOf<Folder?>(null) }
     var showMoveNoteDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
-    var isMultiSelectMode by remember { mutableStateOf(false) }
 
     // User message toasts / snackbar
     LaunchedEffect(Unit) {
@@ -357,28 +356,41 @@ fun MainOutlinerScreen(
                 TopAppBar(
                     title = {
                         if (currentView is AppView.Editor && activeNote != null) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { showRenameNoteDialog = true }
-                                    .padding(vertical = 4.dp, horizontal = 6.dp)
-                            ) {
-                                Text(
-                                    text = activeNote?.title ?: "Untitled",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(
-                                    imageVector = Icons.Default.DriveFileRenameOutline,
-                                    contentDescription = "Rename",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(16.dp)
-                                )
+                            var titleText by remember(activeNote?.id, activeNote?.title) {
+                                mutableStateOf(activeNote?.title ?: "")
                             }
+                            BasicTextField(
+                                value = titleText,
+                                onValueChange = { newTitle ->
+                                    titleText = newTitle
+                                    viewModel.renameActiveNote(newTitle)
+                                },
+                                singleLine = true,
+                                textStyle = TextStyle(
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp, horizontal = 2.dp),
+                                decorationBox = { innerTextField ->
+                                    Box {
+                                        if (titleText.isEmpty()) {
+                                            Text(
+                                                text = "Untitled",
+                                                style = TextStyle(
+                                                    fontSize = 18.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                                )
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
+                            )
                         } else {
                             Text(
                                 text = when (currentView) {
@@ -391,7 +403,6 @@ fun MainOutlinerScreen(
                                         val fId = (currentView as AppView.FolderView).folderId
                                         folders.find { it.id == fId }?.name ?: "Folder"
                                     }
-                                    is AppView.TagFilter -> "#${(currentView as AppView.TagFilter).tagName}"
                                     else -> "Outliner"
                                 },
                                 fontWeight = FontWeight.Bold,
@@ -419,18 +430,6 @@ fun MainOutlinerScreen(
                                     imageVector = if (activeNote!!.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                                     contentDescription = "Favorite",
                                     tint = if (activeNote!!.isFavorite) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-
-                            // Multi-Select Toggle
-                            IconButton(onClick = {
-                                isMultiSelectMode = !isMultiSelectMode
-                                if (!isMultiSelectMode) viewModel.clearSelection()
-                            }) {
-                                Icon(
-                                    imageVector = if (isMultiSelectMode) Icons.Default.Close else Icons.Default.SelectAll,
-                                    contentDescription = "Multi Select",
-                                    tint = if (isMultiSelectMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                 )
                             }
 
@@ -528,20 +527,11 @@ fun MainOutlinerScreen(
                 if (currentView is AppView.Editor && activeNote != null) {
                     OutlinerToolbar(
                         activeItem = activeEditingItem,
-                        isMultiSelect = isMultiSelectMode,
-                        selectedCount = selectedItemIds.size,
                         canUndo = canUndo,
                         canRedo = canRedo,
-                        onAddSibling = { viewModel.addSiblingItem(activeEditingItemId) },
                         onAddChild = { activeEditingItemId?.let { viewModel.addChildItem(it) } },
-                        onIndent = {
-                            if (isMultiSelectMode) viewModel.indentSelectedItems()
-                            else activeEditingItemId?.let { viewModel.indentItem(it) }
-                        },
-                        onUnindent = {
-                            if (isMultiSelectMode) viewModel.unindentSelectedItems()
-                            else activeEditingItemId?.let { viewModel.unindentItem(it) }
-                        },
+                        onIndent = { activeEditingItemId?.let { viewModel.indentItem(it) } },
+                        onUnindent = { activeEditingItemId?.let { viewModel.unindentItem(it) } },
                         onMoveUp = { activeEditingItemId?.let { viewModel.moveItemUp(it) } },
                         onMoveDown = { activeEditingItemId?.let { viewModel.moveItemDown(it) } },
                         onToggleCheckbox = { activeEditingItemId?.let { viewModel.toggleItemCheckbox(it) } },
@@ -557,8 +547,7 @@ fun MainOutlinerScreen(
                             activeEditingItemId?.let { viewModel.duplicateSubtree(it) }
                         },
                         onDelete = {
-                            if (isMultiSelectMode) viewModel.deleteSelectedItems()
-                            else activeEditingItemId?.let { viewModel.deleteSubtree(it) }
+                            activeEditingItemId?.let { viewModel.deleteSubtree(it) }
                         },
                         onUndo = { viewModel.undo() },
                         onRedo = { viewModel.redo() },
@@ -616,12 +605,13 @@ fun MainOutlinerScreen(
                                         ) { node ->
                                             OutlinerItemRow(
                                                 node = node,
-                                                isSelected = selectedItemIds.contains(node.item.id),
-                                                isMultiSelectMode = isMultiSelectMode,
                                                 isCurrentEditing = activeEditingItemId == node.item.id,
                                                 audioController = viewModel.audioController,
                                                 onTextChange = { newText ->
                                                     viewModel.updateItemText(node.item.id, newText)
+                                                },
+                                                onDeleteEmptyItem = {
+                                                    viewModel.deleteEmptyItemAndFocusPrevious(node.item.id)
                                                 },
                                                 onSplitItem = { before, after ->
                                                     viewModel.splitItem(node.item.id, before, after)
@@ -643,9 +633,6 @@ fun MainOutlinerScreen(
                                                 },
                                                 onToggleCollapsed = {
                                                     viewModel.toggleItemCollapsed(node.item.id)
-                                                },
-                                                onToggleSelection = {
-                                                    viewModel.toggleItemSelection(node.item.id)
                                                 },
                                                 onFocusGain = {
                                                     viewModel.setActiveEditingItem(node.item.id)
@@ -717,20 +704,6 @@ fun MainOutlinerScreen(
                     is AppView.Settings -> {
                         SettingsScreen(viewModel = viewModel)
                     }
-                    is AppView.TagFilter -> {
-                        val tagName = (currentView as AppView.TagFilter).tagName
-                        // Search for notes with this tag
-                        EmptyStateView(
-                            icon = Icons.Default.Checklist,
-                            title = "Tag: #$tagName",
-                            subtitle = "Use the global search to jump directly to all items marked #$tagName",
-                            actionLabel = "Search #$tagName",
-                            onActionClick = {
-                                viewModel.onSearchQueryChanged("#$tagName")
-                                showSearchDialog = true
-                            }
-                        )
-                    }
                 }
             }
         }
@@ -787,20 +760,6 @@ fun MainOutlinerScreen(
                 showNewFolderDialog = false
             },
             onDismiss = { showNewFolderDialog = false }
-        )
-    }
-
-    if (showRenameNoteDialog && activeNote != null) {
-        SimpleInputDialog(
-            title = "Rename Note",
-            initialValue = activeNote!!.title,
-            label = "Note Title",
-            confirmLabel = "Rename",
-            onConfirm = { newTitle ->
-                viewModel.renameActiveNote(newTitle)
-                showRenameNoteDialog = false
-            },
-            onDismiss = { showRenameNoteDialog = false }
         )
     }
 

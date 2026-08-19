@@ -46,8 +46,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -65,19 +67,17 @@ import com.example.media.AudioPlayerController
 @Composable
 fun OutlinerItemRow(
     node: TreeItemNode,
-    isSelected: Boolean,
-    isMultiSelectMode: Boolean,
     isCurrentEditing: Boolean,
     audioController: AudioPlayerController,
     onTextChange: (String) -> Unit,
     onSplitItem: (String, String) -> Unit,
+    onDeleteEmptyItem: () -> Unit,
     onAddSiblingAfter: () -> Unit,
     onAddChild: () -> Unit,
     onIndent: () -> Unit,
     onUnindent: () -> Unit,
     onToggleCheckbox: () -> Unit,
     onToggleCollapsed: () -> Unit,
-    onToggleSelection: () -> Unit,
     onFocusGain: () -> Unit,
     onZoomFocus: () -> Unit,
     onDuplicate: () -> Unit,
@@ -146,37 +146,17 @@ fun OutlinerItemRow(
     }
 
     val backgroundColor = parseColor(item.backgroundColor, Color.Transparent)
-    val rowBackground = if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f) else Color.Transparent
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(rowBackground)
             .combinedClickable(
-                onClick = {
-                    if (isMultiSelectMode) {
-                        onToggleSelection()
-                    } else {
-                        onFocusGain()
-                    }
-                },
-                onLongClick = {
-                    showContextMenu = true
-                }
+                onClick = { onFocusGain() },
+                onLongClick = { showContextMenu = true }
             )
             .padding(vertical = 4.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.Top
     ) {
-        // Multi-select Checkbox if in multi-select mode
-        if (isMultiSelectMode) {
-            Checkbox(
-                checked = isSelected,
-                onCheckedChange = { onToggleSelection() },
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-        }
-
         // Tree Indentation spacer with optional subtle branch line
         val indentWidth = (node.level * 20).dp
         if (node.level > 0) {
@@ -246,7 +226,7 @@ fun OutlinerItemRow(
             )
         }
 
-        // Main Item Content: Editable Text Field, Tags, URLs, Media Embeds
+        // Main Item Content: Editable Text Field, URLs, Media Embeds
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -268,6 +248,9 @@ fun OutlinerItemRow(
                             val after = newTfv.text.substring(newlineIdx + 1)
                             textFieldValue = TextFieldValue(text = before, selection = TextRange(before.length))
                             onSplitItem(before, after)
+                        } else if (newTfv.text.isEmpty() && textFieldValue.text.isEmpty()) {
+                            // Empty line backspace
+                            onDeleteEmptyItem()
                         } else {
                             textFieldValue = newTfv
                             onTextChange(newTfv.text)
@@ -288,7 +271,7 @@ fun OutlinerItemRow(
                             }
                         }
                         .onPreviewKeyEvent { event ->
-                            if (event.key == Key.Enter) {
+                            if (event.key == Key.Enter && event.type == KeyEventType.KeyDown) {
                                 val currentText = textFieldValue.text
                                 val cursor = textFieldValue.selection.start
                                 val before = if (cursor in 0..currentText.length) currentText.substring(0, cursor) else currentText
@@ -296,7 +279,14 @@ fun OutlinerItemRow(
                                 textFieldValue = TextFieldValue(text = before, selection = TextRange(before.length))
                                 onSplitItem(before, after)
                                 true
-                            } else if (event.key == Key.Tab) {
+                            } else if ((event.key == Key.Backspace || event.key == Key.Delete) && event.type == KeyEventType.KeyDown) {
+                                if (textFieldValue.text.isEmpty()) {
+                                    onDeleteEmptyItem()
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else if (event.key == Key.Tab && event.type == KeyEventType.KeyDown) {
                                 onIndent()
                                 true
                             } else {
