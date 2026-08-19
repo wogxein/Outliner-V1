@@ -1,0 +1,26 @@
+workflows:
+  android-workflow:
+    name: Android Build Workflow
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      android_sdk:
+        - build-tools-36.0.0
+        - platforms-android-36
+      java: 21
+    scripts:
+      - name: Set up local properties
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+      - name: Make Gradle wrapper executable
+        script: |
+          chmod +x ./gradlew
+      - name: Build Android Debug APK
+        script: |
+          ./gradlew assembleDebug
+      - name: Build Android Release Bundle
+        script: |
+          ./gradlew bundleRelease || ./gradlew assembleRelease
+    artifacts:
+      - app/build/outputs/**/*.apk
+      - app/build/outputs/**/*.aab

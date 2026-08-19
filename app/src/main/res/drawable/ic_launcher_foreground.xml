@@ -1,0 +1,49 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Root bullet & line -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M34,34a5,5 0 1,0 0,-0.01Z" />
+    <path
+        android:pathData="M44,34 L80,34"
+        android:strokeColor="#F8FAFC"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+
+    <!-- Branch guide lines -->
+    <path
+        android:pathData="M34,39 L34,74 L42,74"
+        android:strokeColor="#64748B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M34,54 L42,54"
+        android:strokeColor="#64748B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+
+    <!-- Child bullet 1 & line -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M48,54a4,4 0 1,0 0,-0.01Z" />
+    <path
+        android:pathData="M57,54 L78,54"
+        android:strokeColor="#E2E8F0"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+
+    <!-- Sub-child bullet 2 & line -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M48,74a4,4 0 1,0 0,-0.01Z" />
+    <path
+        android:pathData="M57,74 L72,74"
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+</vector>
+
