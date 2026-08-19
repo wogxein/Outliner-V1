@@ -12,7 +12,7 @@ object MarkdownImporter {
 
     fun parseMarkdown(content: String, noteId: String): ParsedMarkdown {
         val lines = content.lines()
-        var noteTitle = "Imported Note"
+        var noteTitle = "Untitled Note"
         val rawItems = mutableListOf<RawLineItem>()
         var foundTitle = false
 
@@ -20,9 +20,15 @@ object MarkdownImporter {
             val trimmed = line.trim()
             if (trimmed.isEmpty()) continue
 
-            // Check if first H1 is note title
-            if (!foundTitle && trimmed.startsWith("# ")) {
-                noteTitle = trimmed.removePrefix("# ").trim()
+            // The very first non-empty line becomes the note title / heading
+            if (!foundTitle) {
+                var extractedTitle = trimmed
+                if (extractedTitle.startsWith("# ")) {
+                    extractedTitle = extractedTitle.removePrefix("# ").trim()
+                } else if (extractedTitle.startsWith("- ") || extractedTitle.startsWith("* ")) {
+                    extractedTitle = extractedTitle.substring(2).trim()
+                }
+                noteTitle = if (extractedTitle.isNotBlank()) extractedTitle else "Untitled Note"
                 foundTitle = true
                 continue
             }

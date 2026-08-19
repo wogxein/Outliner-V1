@@ -4,10 +4,13 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.local.dao.AiChatDao
 import com.example.data.local.dao.FolderDao
 import com.example.data.local.dao.NoteDao
 import com.example.data.local.dao.OutlineItemDao
 import com.example.data.local.dao.TagDao
+import com.example.data.local.entity.AIConversationEntity
+import com.example.data.local.entity.AIMessageEntity
 import com.example.data.local.entity.FolderEntity
 import com.example.data.local.entity.ItemTagCrossRef
 import com.example.data.local.entity.NoteEntity
@@ -20,9 +23,11 @@ import com.example.data.local.entity.TagEntity
         NoteEntity::class,
         OutlineItemEntity::class,
         TagEntity::class,
-        ItemTagCrossRef::class
+        ItemTagCrossRef::class,
+        AIConversationEntity::class,
+        AIMessageEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -30,6 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun outlineItemDao(): OutlineItemDao
     abstract fun tagDao(): TagDao
+    abstract fun aiChatDao(): AiChatDao
 
     companion object {
         @Volatile
@@ -41,7 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "outliner_database.db"
-                ).fallbackToDestructiveMigration(false)
+                ).fallbackToDestructiveMigration(true)
                  .build()
                 INSTANCE = instance
                 instance

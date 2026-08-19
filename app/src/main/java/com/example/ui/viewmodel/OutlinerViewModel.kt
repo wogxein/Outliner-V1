@@ -6,7 +6,12 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
+import com.example.data.remote.GeminiAiService
+import com.example.domain.model.AIConversation
+import com.example.domain.model.AIMessage
+import com.example.domain.model.AiResearchState
 import com.example.domain.model.Folder
+import com.example.domain.model.GroundingCitation
 import com.example.domain.model.Note
 import com.example.domain.model.OutlineItem
 import com.example.domain.model.SearchResult
@@ -39,8 +44,21 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Stack
 import java.util.UUID
+
+enum class AiQuickAction(val label: String, val promptInstruction: String) {
+    MAKE_SHORTER("Make Shorter", "Please make your previous response more concise, highlighting only key takeaways."),
+    EXPAND("Expand", "Please expand on the previous response with in-depth explanations, details, and context from the web."),
+    SUMMARIZE("Summarize", "Please provide a concise executive summary of the previous topic."),
+    TURN_INTO_OUTLINE("Turn into Outline", "Please structure the response as a clean hierarchical outline with main topics and indented sub-topics."),
+    BULLET_POINTS("Bullet Points", "Please convert the response into clean, scannable bullet points."),
+    EXPLAIN_SIMPLY("Explain Simply", "Please explain this topic in simple, beginner-friendly terms (ELI5 style)."),
+    FIND_SOURCES("Find Sources", "Please find additional live web sources, authoritative articles, and references for this topic."),
+    FACT_CHECK("Fact Check", "Please search the web to verify and fact-check all key claims and numbers in this response."),
+    REGENERATE("Regenerate", "Please research this topic again from the live web and provide an improved, comprehensive answer.")
+}
 
 sealed class AppView {
     data class Editor(val noteId: String, val targetItemId: String? = null) : AppView()
@@ -50,6 +68,7 @@ sealed class AppView {
     object Recent : AppView()
     object Trash : AppView()
     object Settings : AppView()
+    data class AiResearch(val conversationId: String? = null, val folderId: String? = null, val noteId: String? = null) : AppView()
 }
 
 class OutlinerViewModel(
@@ -59,14 +78,212 @@ class OutlinerViewModel(
 
     val audioController = AudioPlayerController(application)
 
-    // Theme Management (Light / Dark only)
+    // Theme & Appearance Preferences
     private val prefs = application.getSharedPreferences("outliner_prefs", Context.MODE_PRIVATE)
     private val _isDarkTheme = MutableStateFlow(prefs.getBoolean("is_dark_theme", false))
     val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
 
+    private val _customPrimaryColorHex = MutableStateFlow<String?>(prefs.getString("custom_primary_hex", null))
+    val customPrimaryColorHex: StateFlow<String?> = _customPrimaryColorHex.asStateFlow()
+
+    private val _customBgColorHex = MutableStateFlow<String?>(prefs.getString("custom_bg_hex", null))
+    val customBgColorHex: StateFlow<String?> = _customBgColorHex.asStateFlow()
+
+    private val _appFontFamily = MutableStateFlow(prefs.getString("app_font_family", "inter") ?: "inter")
+    val appFontFamily: StateFlow<String> = _appFontFamily.asStateFlow()
+
+    private val _customFontPath = MutableStateFlow<String?>(prefs.getString("custom_font_path", null))
+    val customFontPath: StateFlow<String?> = _customFontPath.asStateFlow()
+
+    private val _appFontSizeIndex = MutableStateFlow(prefs.getInt("app_font_size_idx", 2))
+    val appFontSizeIndex: StateFlow<Int> = _appFontSizeIndex.asStateFlow()
+
+    private val _appDensity = MutableStateFlow(prefs.getString("app_density", "COMFORTABLE") ?: "COMFORTABLE")
+    val appDensity: StateFlow<String> = _appDensity.asStateFlow()
+
+    // Sidebar & View Customization Preferences
+    private val _showFavoritesInSidebar = MutableStateFlow(prefs.getBoolean("show_favorites_sidebar", true))
+    val showFavoritesInSidebar: StateFlow<Boolean> = _showFavoritesInSidebar.asStateFlow()
+
+    private val _showRecentInSidebar = MutableStateFlow(prefs.getBoolean("show_recent_sidebar", true))
+    val showRecentInSidebar: StateFlow<Boolean> = _showRecentInSidebar.asStateFlow()
+
+    private val _showTrashInSidebar = MutableStateFlow(prefs.getBoolean("show_trash_sidebar", true))
+    val showTrashInSidebar: StateFlow<Boolean> = _showTrashInSidebar.asStateFlow()
+
+    private val _showItemCounts = MutableStateFlow(prefs.getBoolean("show_item_counts", true))
+    val showItemCounts: StateFlow<Boolean> = _showItemCounts.asStateFlow()
+
+    private val _showWordCountInNote = MutableStateFlow(prefs.getBoolean("show_word_count_note", true))
+    val showWordCountInNote: StateFlow<Boolean> = _showWordCountInNote.asStateFlow()
+
+    // Custom AI Configuration
+    private val _aiApiKey = MutableStateFlow(prefs.getString("custom_ai_api_key", "") ?: "")
+    val aiApiKey: StateFlow<String> = _aiApiKey.asStateFlow()
+
+    private val _aiBaseUrl = MutableStateFlow(prefs.getString("custom_ai_base_url", GeminiAiService.DEFAULT_BASE_URL) ?: GeminiAiService.DEFAULT_BASE_URL)
+    val aiBaseUrl: StateFlow<String> = _aiBaseUrl.asStateFlow()
+
+    private val _aiModelId = MutableStateFlow(prefs.getString("custom_ai_model_id", GeminiAiService.DEFAULT_MODEL) ?: GeminiAiService.DEFAULT_MODEL)
+    val aiModelId: StateFlow<String> = _aiModelId.asStateFlow()
+
+    private val _aiCustomTitle = MutableStateFlow(prefs.getString("custom_ai_title", "Research Assistant") ?: "Research Assistant")
+    val aiCustomTitle: StateFlow<String> = _aiCustomTitle.asStateFlow()
+
+    private val _aiCustomSystemPrompt = MutableStateFlow(prefs.getString("custom_ai_system_prompt", "") ?: "")
+    val aiCustomSystemPrompt: StateFlow<String> = _aiCustomSystemPrompt.asStateFlow()
+
+    // Multi-selection of notes in AllNotes/Folders
+    private val _selectedNoteIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedNoteIds: StateFlow<Set<String>> = _selectedNoteIds.asStateFlow()
+
+    fun setAiApiKey(key: String) {
+        _aiApiKey.value = key.trim()
+        prefs.edit().putString("custom_ai_api_key", key.trim()).apply()
+    }
+
+    fun setAiBaseUrl(url: String) {
+        _aiBaseUrl.value = url.trim()
+        prefs.edit().putString("custom_ai_base_url", url.trim()).apply()
+    }
+
+    fun setAiModelId(model: String) {
+        _aiModelId.value = model.trim()
+        prefs.edit().putString("custom_ai_model_id", model.trim()).apply()
+    }
+
+    fun setAiCustomTitle(title: String) {
+        _aiCustomTitle.value = title.trim()
+        prefs.edit().putString("custom_ai_title", title.trim()).apply()
+    }
+
+    fun setAiCustomSystemPrompt(prompt: String) {
+        _aiCustomSystemPrompt.value = prompt.trim()
+        prefs.edit().putString("custom_ai_system_prompt", prompt.trim()).apply()
+    }
+
     fun setDarkTheme(isDark: Boolean) {
         _isDarkTheme.value = isDark
         prefs.edit().putBoolean("is_dark_theme", isDark).apply()
+    }
+
+    fun setCustomPrimaryColor(hex: String?) {
+        _customPrimaryColorHex.value = hex
+        prefs.edit().putString("custom_primary_hex", hex).apply()
+    }
+
+    fun setCustomBgColor(hex: String?) {
+        _customBgColorHex.value = hex
+        prefs.edit().putString("custom_bg_hex", hex).apply()
+    }
+
+    fun setAppFontFamily(key: String) {
+        _appFontFamily.value = key
+        prefs.edit().putString("app_font_family", key).apply()
+    }
+
+    fun setAppFontSizeIndex(idx: Int) {
+        val clamped = idx.coerceIn(0, 4)
+        _appFontSizeIndex.value = clamped
+        prefs.edit().putInt("app_font_size_idx", clamped).apply()
+    }
+
+    fun setAppDensity(densityName: String) {
+        _appDensity.value = densityName
+        prefs.edit().putString("app_density", densityName).apply()
+    }
+
+    fun setShowFavoritesInSidebar(show: Boolean) {
+        _showFavoritesInSidebar.value = show
+        prefs.edit().putBoolean("show_favorites_sidebar", show).apply()
+    }
+
+    fun setShowRecentInSidebar(show: Boolean) {
+        _showRecentInSidebar.value = show
+        prefs.edit().putBoolean("show_recent_sidebar", show).apply()
+    }
+
+    fun setShowTrashInSidebar(show: Boolean) {
+        _showTrashInSidebar.value = show
+        prefs.edit().putBoolean("show_trash_sidebar", show).apply()
+    }
+
+    fun setShowItemCounts(show: Boolean) {
+        _showItemCounts.value = show
+        prefs.edit().putBoolean("show_item_counts", show).apply()
+    }
+
+    fun setShowWordCountInNote(show: Boolean) {
+        _showWordCountInNote.value = show
+        prefs.edit().putBoolean("show_word_count_note", show).apply()
+    }
+
+    fun importCustomFont(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val fontDir = File(context.filesDir, "fonts")
+                if (!fontDir.exists()) fontDir.mkdirs()
+                val fontFile = File(fontDir, "custom_font_${System.currentTimeMillis()}.ttf")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(fontFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                _customFontPath.value = fontFile.absolutePath
+                _appFontFamily.value = "custom"
+                prefs.edit()
+                    .putString("custom_font_path", fontFile.absolutePath)
+                    .putString("app_font_family", "custom")
+                    .apply()
+                _userMessage.emit("Custom font imported successfully")
+            } catch (e: Exception) {
+                _userMessage.emit("Failed to load font: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    // Multi-note operations
+    fun toggleNoteSelection(noteId: String) {
+        val current = _selectedNoteIds.value
+        _selectedNoteIds.value = if (current.contains(noteId)) current - noteId else current + noteId
+    }
+
+    fun selectAllNotes(allIds: List<String>) {
+        _selectedNoteIds.value = allIds.toSet()
+    }
+
+    fun clearNoteSelection() {
+        _selectedNoteIds.value = emptySet()
+    }
+
+    fun deleteSelectedNotes() {
+        val idsToDelete = _selectedNoteIds.value.toList()
+        if (idsToDelete.isEmpty()) return
+        viewModelScope.launch {
+            idsToDelete.forEach { id ->
+                repository.softDeleteNote(id)
+            }
+            _selectedNoteIds.value = emptySet()
+            _userMessage.emit("Moved ${idsToDelete.size} notes to trash")
+        }
+    }
+
+    fun moveSelectedNotesToFolder(folderId: String?) {
+        val idsToMove = _selectedNoteIds.value.toList()
+        if (idsToMove.isEmpty()) return
+        viewModelScope.launch {
+            idsToMove.forEach { id ->
+                repository.moveNoteToFolder(id, folderId)
+            }
+            _selectedNoteIds.value = emptySet()
+            _userMessage.emit("Moved ${idsToMove.size} notes to folder")
+        }
+    }
+
+    fun getMarkdownForNote(noteId: String): String {
+        val note = notes.value.find { it.id == noteId } ?: activeNote.value ?: return ""
+        val items = outlineItems.value
+        return PlainTextExporter.exportToPlainText(note, items)
     }
 
     // Navigation State
@@ -154,6 +371,30 @@ class OutlinerViewModel(
         TreeOperations.getBreadcrumbs(items, focusedId)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // AI Research & Assistant State
+    private val _activeAiConversationId = MutableStateFlow<String?>(null)
+    val activeAiConversationId: StateFlow<String?> = _activeAiConversationId.asStateFlow()
+
+    private val _aiResearchState = MutableStateFlow<AiResearchState>(AiResearchState.Idle)
+    val aiResearchState: StateFlow<AiResearchState> = _aiResearchState.asStateFlow()
+
+    private val _isNoteAiPanelOpen = MutableStateFlow(false)
+    val isNoteAiPanelOpen: StateFlow<Boolean> = _isNoteAiPanelOpen.asStateFlow()
+
+    private val _attachedAiUrl = MutableStateFlow<String?>(null)
+    val attachedAiUrl: StateFlow<String?> = _attachedAiUrl.asStateFlow()
+
+    val allAiConversations: StateFlow<List<AIConversation>> = repository.allAiConversations
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeAiConversation: StateFlow<AIConversation?> = _activeAiConversationId.flatMapLatest { id ->
+        if (id == null) flowOf(null) else repository.observeAiConversation(id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val currentAiMessages: StateFlow<List<AIMessage>> = _activeAiConversationId.flatMapLatest { id ->
+        if (id == null) flowOf(emptyList()) else repository.getAiMessages(id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private var autosaveDebounceJob: Job? = null
     private var searchDebounceJob: Job? = null
 
@@ -183,6 +424,32 @@ class OutlinerViewModel(
 
     fun openNote(noteId: String, targetItemId: String? = null) {
         navigateTo(AppView.Editor(noteId, targetItemId))
+    }
+
+    fun navigateBack() {
+        when (val v = _currentView.value) {
+            is AppView.AiResearch -> {
+                if (v.folderId != null) {
+                    navigateTo(AppView.FolderView(v.folderId))
+                } else if (v.noteId != null) {
+                    openNote(v.noteId)
+                } else {
+                    navigateTo(AppView.AllNotes)
+                }
+            }
+            is AppView.Editor -> {
+                val active = activeNote.value
+                if (active?.folderId != null) {
+                    navigateTo(AppView.FolderView(active.folderId))
+                } else {
+                    navigateTo(AppView.AllNotes)
+                }
+            }
+            is AppView.FolderView, is AppView.Favorites, is AppView.Recent, is AppView.Trash, is AppView.Settings -> {
+                navigateTo(AppView.AllNotes)
+            }
+            else -> {}
+        }
     }
 
     // ================= NOTE OPERATIONS ================= //
@@ -824,6 +1091,223 @@ class OutlinerViewModel(
                 openNote(newNoteId)
             } catch (e: Exception) {
                 _userMessage.emit("Failed to import OPML: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    // ================= AI RESEARCH & ASSISTANT METHODS ================= //
+
+    fun openAiResearch(
+        conversationId: String? = null,
+        folderId: String? = null,
+        noteId: String? = null
+    ) {
+        if (conversationId != null) {
+            _activeAiConversationId.value = conversationId
+        } else {
+            // Find existing or create new
+            viewModelScope.launch {
+                val newId = repository.createAiConversation(
+                    title = "New AI Research",
+                    noteId = noteId,
+                    folderId = folderId
+                )
+                _activeAiConversationId.value = newId
+            }
+        }
+        _currentView.value = AppView.AiResearch(
+            conversationId = conversationId,
+            folderId = folderId,
+            noteId = noteId
+        )
+    }
+
+    fun startNewAiConversation(folderId: String? = null, noteId: String? = null) {
+        viewModelScope.launch {
+            val newId = repository.createAiConversation(
+                title = "New AI Research",
+                noteId = noteId ?: _activeNoteId.value,
+                folderId = folderId
+            )
+            _activeAiConversationId.value = newId
+            _aiResearchState.value = AiResearchState.Idle
+            _attachedAiUrl.value = null
+        }
+    }
+
+    fun selectAiConversation(conversationId: String) {
+        _activeAiConversationId.value = conversationId
+        _aiResearchState.value = AiResearchState.Idle
+    }
+
+    fun deleteAiConversation(conversationId: String) {
+        viewModelScope.launch {
+            repository.deleteAiConversation(conversationId)
+            if (_activeAiConversationId.value == conversationId) {
+                val remaining = repository.allAiConversations
+                _activeAiConversationId.value = null
+            }
+            _userMessage.emit("Conversation deleted")
+        }
+    }
+
+    fun toggleNoteAiPanel(open: Boolean? = null) {
+        val next = open ?: !_isNoteAiPanelOpen.value
+        _isNoteAiPanelOpen.value = next
+        if (next && _activeAiConversationId.value == null) {
+            startNewAiConversation(noteId = _activeNoteId.value)
+        }
+    }
+
+    fun setAttachedAiUrl(url: String?) {
+        _attachedAiUrl.value = url?.trim()?.ifBlank { null }
+    }
+
+    fun sendAiMessage(
+        prompt: String,
+        customSystemPrompt: String? = null
+    ) {
+        val trimmed = prompt.trim()
+        if (trimmed.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                // Ensure conversation exists
+                var convId = _activeAiConversationId.value
+                if (convId == null) {
+                    convId = repository.createAiConversation(
+                        title = trimmed.take(40),
+                        noteId = _activeNoteId.value
+                    )
+                    _activeAiConversationId.value = convId
+                }
+
+                // Save user message
+                repository.saveAiMessage(
+                    conversationId = convId,
+                    role = "user",
+                    content = trimmed
+                )
+
+                _aiResearchState.value = AiResearchState.Loading("Searching Google & analyzing...")
+
+                // Build context from active note if present
+                val noteContextBuilder = StringBuilder()
+                val currentNote = activeNote.value
+                val currentItems = outlineItems.value
+                if (currentNote != null) {
+                    noteContextBuilder.append("Active Note Title: \"${currentNote.title}\"\n")
+                    if (currentItems.isNotEmpty()) {
+                        noteContextBuilder.append("Note Content Outline:\n")
+                        currentItems.take(50).forEach { item ->
+                            val indent = if (item.parentId != null) "  - " else "- "
+                            noteContextBuilder.append("$indent${item.text}\n")
+                        }
+                    }
+                }
+
+                val currentUrl = _attachedAiUrl.value
+                if (!currentUrl.isNullOrBlank()) {
+                    noteContextBuilder.append("\nUser requested research/analysis specifically for URL: $currentUrl\n")
+                }
+
+                val customPrompt = buildString {
+                    if (_aiCustomSystemPrompt.value.isNotBlank()) {
+                        append("${_aiCustomSystemPrompt.value}\n\n")
+                    }
+                    if (!customSystemPrompt.isNullOrBlank()) {
+                        append("$customSystemPrompt\n\n")
+                    }
+                    append(noteContextBuilder.toString())
+                }.ifBlank { null }
+
+                // Fetch conversation history from DB (up to last 10 messages)
+                val messagesHistory = repository.getAiMessagesList(convId)
+
+                // Call Gemini with Search Grounding & User's Custom API Settings
+                val result = GeminiAiService.research(
+                    messages = messagesHistory,
+                    systemPrompt = customPrompt,
+                    enableSearchGrounding = true,
+                    customApiKey = _aiApiKey.value.ifBlank { null },
+                    customBaseUrl = _aiBaseUrl.value.ifBlank { null },
+                    customModelId = _aiModelId.value.ifBlank { null }
+                )
+
+                result.onSuccess { aiResponse ->
+                    repository.saveAiMessage(
+                        conversationId = convId,
+                        role = "model",
+                        content = aiResponse.text,
+                        citations = aiResponse.citations,
+                        searchQueries = aiResponse.searchQueries
+                    )
+                    _attachedAiUrl.value = null
+                    _aiResearchState.value = AiResearchState.Idle
+                }.onFailure { error ->
+                    _aiResearchState.value = AiResearchState.Error(error.localizedMessage ?: "Failed to generate AI research response")
+                    _userMessage.emit("AI Research Error: ${error.localizedMessage}")
+                }
+            } catch (e: Exception) {
+                _aiResearchState.value = AiResearchState.Error(e.localizedMessage ?: "Unexpected error")
+                _userMessage.emit("AI Error: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun executeAiQuickAction(action: AiQuickAction, targetMessage: AIMessage? = null) {
+        val lastModelMessage = targetMessage ?: currentAiMessages.value.lastOrNull { it.role == "model" }
+        val prompt = if (lastModelMessage != null) {
+            "${action.promptInstruction}\n\nContext:\n${lastModelMessage.content}"
+        } else {
+            action.promptInstruction
+        }
+        sendAiMessage(prompt)
+    }
+
+    fun insertAiContentIntoActiveNote(message: AIMessage, atCursor: Boolean = false) {
+        val noteId = _activeNoteId.value
+        if (noteId == null) {
+            // If no active note, create a new one!
+            createNoteFromAiMessage(message)
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val targetItemId = if (atCursor) _activeEditingItemId.value else null
+                repository.insertAiContentIntoNote(
+                    noteId = noteId,
+                    content = message.content,
+                    citations = message.citations,
+                    targetItemId = targetItemId
+                )
+                _userMessage.emit("Added AI content and citations to note")
+            } catch (e: Exception) {
+                _userMessage.emit("Failed to add to note: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun createNoteFromAiMessage(message: AIMessage, customTitle: String? = null) {
+        viewModelScope.launch {
+            try {
+                val folderId = when (val view = _currentView.value) {
+                    is AppView.FolderView -> view.folderId
+                    is AppView.AiResearch -> view.folderId
+                    else -> null
+                }
+
+                val newNoteId = repository.createNoteFromAiContent(
+                    content = message.content,
+                    citations = message.citations,
+                    folderId = folderId,
+                    customTitle = customTitle
+                )
+                _userMessage.emit("Created new note from AI research")
+                openNote(newNoteId)
+            } catch (e: Exception) {
+                _userMessage.emit("Failed to create note: ${e.localizedMessage}")
             }
         }
     }

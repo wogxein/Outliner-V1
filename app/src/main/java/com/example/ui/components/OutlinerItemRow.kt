@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Remove
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.TreeItemNode
@@ -84,22 +86,27 @@ fun OutlinerItemRow(
     onDelete: () -> Unit,
     onOpenColorPicker: () -> Unit,
     onOpenLinkDialog: () -> Unit,
+    onLookupWord: (String) -> Unit = {},
+    verticalPadding: Dp = 4.dp,
     modifier: Modifier = Modifier
 ) {
     val item = node.item
     var showContextMenu by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
 
-    // Maintain local TextFieldValue to avoid Compose cursor reset and typing inversion bug
+    // Maintain local TextFieldValue with preserved cursor position to avoid jumping bugs
     var textFieldValue by remember(item.id) {
         mutableStateOf(TextFieldValue(text = item.text, selection = TextRange(item.text.length)))
     }
 
     LaunchedEffect(item.text) {
         if (item.text != textFieldValue.text) {
+            val oldSelection = textFieldValue.selection
+            val newStart = oldSelection.start.coerceIn(0, item.text.length)
+            val newEnd = oldSelection.end.coerceIn(0, item.text.length)
             textFieldValue = textFieldValue.copy(
                 text = item.text,
-                selection = TextRange(item.text.length)
+                selection = TextRange(newStart, newEnd)
             )
         }
     }
@@ -132,7 +139,7 @@ fun OutlinerItemRow(
             color = parseColor(item.textColor, MaterialTheme.colorScheme.onSurface)
         )
         else -> TextStyle(
-            fontSize = 14.sp,
+            fontSize = 14.5.sp,
             fontWeight = if (item.isBold) FontWeight.Bold else FontWeight.Normal,
             fontStyle = if (item.isItalic) FontStyle.Italic else FontStyle.Normal,
             fontFamily = if (item.isCode) FontFamily.Monospace else FontFamily.Default,
@@ -146,6 +153,21 @@ fun OutlinerItemRow(
     }
 
     val backgroundColor = parseColor(item.backgroundColor, Color.Transparent)
+    val visualTransformation = remember { InlineCodeVisualTransformation() }
+
+    // Helper for auto-numbering detection
+    fun handleEnterOrSplit(beforeRaw: String, afterRaw: String) {
+        val numberRegex = Regex("^(\\d+)\\.\\s*(.*)$")
+        val match = numberRegex.find(beforeRaw)
+        if (match != null) {
+            val num = match.groupValues[1].toIntOrNull() ?: 1
+            val nextPrefix = "${num + 1}. "
+            val newAfter = if (afterRaw.startsWith(nextPrefix)) afterRaw else nextPrefix + afterRaw
+            onSplitItem(beforeRaw, newAfter)
+        } else {
+            onSplitItem(beforeRaw, afterRaw)
+        }
+    }
 
     Row(
         modifier = modifier
@@ -154,10 +176,10 @@ fun OutlinerItemRow(
                 onClick = { onFocusGain() },
                 onLongClick = { showContextMenu = true }
             )
-            .padding(vertical = 4.dp, horizontal = 8.dp),
+            .padding(vertical = verticalPadding, horizontal = 8.dp),
         verticalAlignment = Alignment.Top
     ) {
-        // Tree Indentation spacer with optional subtle branch line
+        // Tree Indentation spacer with vertical branch guideline
         val indentWidth = (node.level * 20).dp
         if (node.level > 0) {
             Box(
@@ -165,7 +187,6 @@ fun OutlinerItemRow(
                     .width(indentWidth)
                     .height(24.dp)
             ) {
-                // Subtle vertical guide line
                 Box(
                     modifier = Modifier
                         .padding(start = (node.level * 20 - 10).dp)
@@ -199,19 +220,18 @@ fun OutlinerItemRow(
                     modifier = Modifier.size(18.dp)
                 )
             } else {
-                // Leaf item dot bullet
                 Box(
                     modifier = Modifier
                         .size(6.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
                 )
             }
         }
 
         Spacer(modifier = Modifier.width(4.dp))
 
-        // Outline item Checkbox (if enabled for this item)
+        // Checkbox if present
         if (item.hasCheckbox) {
             Checkbox(
                 checked = item.isChecked,
@@ -224,19 +244,20 @@ fun OutlinerItemRow(
                     uncheckedColor = MaterialTheme.colorScheme.outline
                 )
             )
+            Spacer(modifier = Modifier.width(4.dp))
         }
 
-        // Main Item Content: Editable Text Field, URLs, Media Embeds
+        // Text & Content Area
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 2.dp)
+                .padding(top = 2.dp)
         ) {
-            Box(
+            Surface(
+                color = backgroundColor,
+                shape = RoundedCornerShape(4.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(backgroundColor)
                     .padding(horizontal = if (backgroundColor != Color.Transparent) 6.dp else 0.dp, vertical = 2.dp)
             ) {
                 BasicTextField(
@@ -247,9 +268,8 @@ fun OutlinerItemRow(
                             val before = newTfv.text.substring(0, newlineIdx)
                             val after = newTfv.text.substring(newlineIdx + 1)
                             textFieldValue = TextFieldValue(text = before, selection = TextRange(before.length))
-                            onSplitItem(before, after)
+                            handleEnterOrSplit(before, after)
                         } else if (newTfv.text.isEmpty() && textFieldValue.text.isEmpty()) {
-                            // Empty line backspace
                             onDeleteEmptyItem()
                         } else {
                             textFieldValue = newTfv
@@ -257,6 +277,7 @@ fun OutlinerItemRow(
                         }
                     },
                     textStyle = textStyle,
+                    visualTransformation = visualTransformation,
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                     keyboardActions = KeyboardActions(
@@ -277,10 +298,17 @@ fun OutlinerItemRow(
                                 val before = if (cursor in 0..currentText.length) currentText.substring(0, cursor) else currentText
                                 val after = if (cursor in 0..currentText.length) currentText.substring(cursor) else ""
                                 textFieldValue = TextFieldValue(text = before, selection = TextRange(before.length))
-                                onSplitItem(before, after)
+                                handleEnterOrSplit(before, after)
                                 true
                             } else if ((event.key == Key.Backspace || event.key == Key.Delete) && event.type == KeyEventType.KeyDown) {
-                                if (textFieldValue.text.isEmpty()) {
+                                val text = textFieldValue.text
+                                val numberOnlyRegex = Regex("^(\\d+)\\.\\s*$")
+                                if (numberOnlyRegex.matches(text)) {
+                                    // Remove number formatting instead of deleting line
+                                    textFieldValue = TextFieldValue(text = "", selection = TextRange(0))
+                                    onTextChange("")
+                                    true
+                                } else if (text.isEmpty()) {
                                     onDeleteEmptyItem()
                                     true
                                 } else {
@@ -344,6 +372,26 @@ fun OutlinerItemRow(
             expanded = showContextMenu,
             onDismissRequest = { showContextMenu = false }
         ) {
+            // Find Meaning action
+            val selectedWord = if (textFieldValue.selection.collapsed) {
+                item.text.trim()
+            } else {
+                try {
+                    textFieldValue.text.substring(textFieldValue.selection.min, textFieldValue.selection.max).trim()
+                } catch (e: Exception) {
+                    item.text.trim()
+                }
+            }
+            if (selectedWord.isNotBlank()) {
+                DropdownMenuItem(
+                    text = { Text("Find Meaning") },
+                    leadingIcon = { Icon(Icons.Default.AutoStories, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    onClick = {
+                        showContextMenu = false
+                        onLookupWord(selectedWord)
+                    }
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Zoom / Focus into this branch") },
                 onClick = {

@@ -1,12 +1,18 @@
 package com.example.domain.repository
 
 import com.example.data.local.AppDatabase
+import com.example.data.local.entity.AIConversationEntity
+import com.example.data.local.entity.AIMessageEntity
 import com.example.data.local.entity.FolderEntity
 import com.example.data.local.entity.ItemTagCrossRef
 import com.example.data.local.entity.NoteEntity
 import com.example.data.local.entity.OutlineItemEntity
 import com.example.data.local.entity.TagEntity
+import com.example.domain.ai.AiTreeFormatter
+import com.example.domain.model.AIConversation
+import com.example.domain.model.AIMessage
 import com.example.domain.model.Folder
+import com.example.domain.model.GroundingCitation
 import com.example.domain.model.Note
 import com.example.domain.model.OutlineItem
 import com.example.domain.model.SearchResult
@@ -18,6 +24,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
 class OutlinerRepository(private val db: AppDatabase) {
@@ -26,6 +34,7 @@ class OutlinerRepository(private val db: AppDatabase) {
     private val noteDao = db.noteDao()
     private val outlineItemDao = db.outlineItemDao()
     private val tagDao = db.tagDao()
+    private val aiChatDao = db.aiChatDao()
 
     // ================= FOLDERS ================= //
 
@@ -417,7 +426,276 @@ class OutlinerRepository(private val db: AppDatabase) {
         tagDao.insertCrossRefs(crossRefs)
     }
 
+    // ================= AI RESEARCH & CHAT ================= //
+
+    val allAiConversations: Flow<List<AIConversation>> = aiChatDao.getAllConversations()
+        .map { list -> list.map { it.toDomain() } }
+        .flowOn(Dispatchers.IO)
+
+    fun getAiConversationsForNote(noteId: String): Flow<List<AIConversation>> =
+        aiChatDao.getConversationsForNote(noteId)
+            .map { list -> list.map { it.toDomain() } }
+            .flowOn(Dispatchers.IO)
+
+    fun getAiConversationsForFolder(folderId: String): Flow<List<AIConversation>> =
+        aiChatDao.getConversationsForFolder(folderId)
+            .map { list -> list.map { it.toDomain() } }
+            .flowOn(Dispatchers.IO)
+
+    suspend fun getAiConversation(id: String): AIConversation? = withContext(Dispatchers.IO) {
+        aiChatDao.getConversationById(id)?.toDomain()
+    }
+
+    fun observeAiConversation(id: String): Flow<AIConversation?> =
+        aiChatDao.observeConversationById(id)
+            .map { it?.toDomain() }
+            .flowOn(Dispatchers.IO)
+
+    fun getAiMessages(conversationId: String): Flow<List<AIMessage>> =
+        aiChatDao.getMessagesForConversation(conversationId)
+            .map { list -> list.map { it.toDomain() } }
+            .flowOn(Dispatchers.IO)
+
+    suspend fun getAiMessagesList(conversationId: String): List<AIMessage> = withContext(Dispatchers.IO) {
+        aiChatDao.getMessagesForConversationList(conversationId).map { it.toDomain() }
+    }
+
+    suspend fun createAiConversation(
+        title: String,
+        noteId: String? = null,
+        folderId: String? = null
+    ): String = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        val conv = AIConversationEntity(
+            id = id,
+            title = title.trim().ifEmpty { "New AI Research" },
+            noteId = noteId,
+            folderId = folderId,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        aiChatDao.insertConversation(conv)
+        id
+    }
+
+    suspend fun updateAiConversationTitle(id: String, title: String) = withContext(Dispatchers.IO) {
+        val existing = aiChatDao.getConversationById(id) ?: return@withContext
+        aiChatDao.updateConversation(
+            existing.copy(
+                title = title.trim().ifEmpty { existing.title },
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun deleteAiConversation(id: String) = withContext(Dispatchers.IO) {
+        aiChatDao.deleteMessagesForConversation(id)
+        aiChatDao.deleteConversation(id)
+    }
+
+    suspend fun saveAiMessage(
+        conversationId: String,
+        role: String,
+        content: String,
+        citations: List<GroundingCitation> = emptyList(),
+        searchQueries: List<String> = emptyList()
+    ): String = withContext(Dispatchers.IO) {
+        val msgId = UUID.randomUUID().toString()
+        val sourcesJson = if (citations.isNotEmpty()) {
+            val arr = JSONArray()
+            for (c in citations) {
+                val obj = JSONObject()
+                obj.put("title", c.title)
+                obj.put("url", c.url)
+                if (c.snippet != null) obj.put("snippet", c.snippet)
+                arr.put(obj)
+            }
+            arr.toString()
+        } else null
+
+        val queriesJson = if (searchQueries.isNotEmpty()) {
+            val arr = JSONArray()
+            searchQueries.forEach { arr.put(it) }
+            arr.toString()
+        } else null
+
+        val entity = AIMessageEntity(
+            id = msgId,
+            conversationId = conversationId,
+            role = role,
+            content = content,
+            sourcesJson = sourcesJson,
+            searchQueriesJson = queriesJson,
+            createdAt = System.currentTimeMillis()
+        )
+        aiChatDao.insertMessage(entity)
+
+        // Update conversation timestamp & title if first message
+        val conv = aiChatDao.getConversationById(conversationId)
+        if (conv != null) {
+            val newTitle = if (conv.title == "New AI Research" && role == "user") {
+                content.take(40).trim().ifEmpty { "AI Research" }
+            } else {
+                conv.title
+            }
+            aiChatDao.updateConversation(conv.copy(title = newTitle, updatedAt = System.currentTimeMillis()))
+        }
+
+        msgId
+    }
+
+    // ================= AI NOTE INSERTION ================= //
+
+    /**
+     * Inserts structured AI research result and citations into an existing note.
+     * If targetItemId is provided, inserts items relative to that item.
+     */
+    suspend fun insertAiContentIntoNote(
+        noteId: String,
+        content: String,
+        citations: List<GroundingCitation>,
+        targetItemId: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val currentItems = outlineItemDao.getItemsForNoteList(noteId).map { it.toDomain() }
+        val formatted = AiTreeFormatter.formatAiResponseToItems(content, citations, noteId)
+        val newAiItems = formatted.items
+
+        if (currentItems.isEmpty()) {
+            outlineItemDao.replaceItemsForNote(noteId, newAiItems.map { it.toEntity() })
+        } else if (targetItemId != null) {
+            val targetIndex = currentItems.indexOfFirst { it.id == targetItemId }
+            if (targetIndex != -1) {
+                val target = currentItems[targetIndex]
+                // Insert as children of target or siblings
+                val updatedItems = mutableListOf<OutlineItem>()
+                updatedItems.addAll(currentItems)
+                
+                val startOrder = target.sortOrder + 1
+                val mappedNewItems = newAiItems.mapIndexed { idx, item ->
+                    if (item.parentId == null) {
+                        item.copy(parentId = target.parentId, sortOrder = startOrder + idx)
+                    } else {
+                        item
+                    }
+                }
+                
+                // Shift subsequent siblings
+                val finalItems = mutableListOf<OutlineItem>()
+                for (it in updatedItems) {
+                    if (it.parentId == target.parentId && it.sortOrder > target.sortOrder) {
+                        finalItems.add(it.copy(sortOrder = it.sortOrder + newAiItems.size))
+                    } else {
+                        finalItems.add(it)
+                    }
+                }
+                finalItems.addAll(mappedNewItems)
+                outlineItemDao.replaceItemsForNote(noteId, finalItems.map { it.toEntity() })
+            } else {
+                val maxOrder = (currentItems.filter { it.parentId == null }.maxOfOrNull { it.sortOrder } ?: -1) + 1
+                val mapped = newAiItems.map { item ->
+                    if (item.parentId == null) item.copy(sortOrder = item.sortOrder + maxOrder) else item
+                }
+                outlineItemDao.insertItems(mapped.map { it.toEntity() })
+            }
+        } else {
+            // Append at the end of root
+            val maxOrder = (currentItems.filter { it.parentId == null }.maxOfOrNull { it.sortOrder } ?: -1) + 1
+            val mapped = newAiItems.map { item ->
+                if (item.parentId == null) item.copy(sortOrder = item.sortOrder + maxOrder) else item
+            }
+            val combined = currentItems + mapped
+            outlineItemDao.replaceItemsForNote(noteId, combined.map { it.toEntity() })
+        }
+
+        noteDao.getNoteById(noteId)?.let {
+            noteDao.updateNote(it.copy(updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    /**
+     * Creates a brand new note from AI research content and citations.
+     */
+    suspend fun createNoteFromAiContent(
+        content: String,
+        citations: List<GroundingCitation>,
+        folderId: String? = null,
+        customTitle: String? = null
+    ): String = withContext(Dispatchers.IO) {
+        val noteId = UUID.randomUUID().toString()
+        val formatted = AiTreeFormatter.formatAiResponseToItems(
+            content = content,
+            citations = citations,
+            targetNoteId = noteId,
+            defaultTitle = customTitle ?: "AI Research Note"
+        )
+
+        val noteTitle = customTitle?.ifBlank { null } ?: formatted.suggestedTitle
+        val now = System.currentTimeMillis()
+        val note = NoteEntity(
+            id = noteId,
+            folderId = folderId,
+            title = noteTitle,
+            isFavorite = false,
+            createdAt = now,
+            updatedAt = now,
+            lastAccessedAt = now
+        )
+        noteDao.insertNote(note)
+        outlineItemDao.insertItems(formatted.items.map { it.toEntity() })
+        noteId
+    }
+
     // ================= ENTITY MAPPERS ================= //
+
+    private fun AIConversationEntity.toDomain(messageCount: Int = 0) = AIConversation(
+        id = id,
+        title = title,
+        noteId = noteId,
+        folderId = folderId,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        messageCount = messageCount
+    )
+
+    private fun AIMessageEntity.toDomain(): AIMessage {
+        val citations = mutableListOf<GroundingCitation>()
+        if (!sourcesJson.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(sourcesJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    citations.add(
+                        GroundingCitation(
+                            title = obj.optString("title", ""),
+                            url = obj.optString("url", ""),
+                            snippet = obj.optString("snippet").ifEmpty { null }
+                        )
+                    )
+                }
+            } catch (_: Exception) {}
+        }
+
+        val queries = mutableListOf<String>()
+        if (!searchQueriesJson.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(searchQueriesJson)
+                for (i in 0 until arr.length()) {
+                    val q = arr.optString(i)
+                    if (q.isNotBlank()) queries.add(q)
+                }
+            } catch (_: Exception) {}
+        }
+
+        return AIMessage(
+            id = id,
+            conversationId = conversationId,
+            role = role,
+            content = content,
+            citations = citations,
+            searchQueries = queries,
+            createdAt = createdAt
+        )
+    }
 
     private fun FolderEntity.toDomain(noteCount: Int = 0) = Folder(
         id = id,

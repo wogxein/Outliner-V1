@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,14 +17,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
@@ -59,14 +63,19 @@ import java.util.Locale
 fun NotesListScreen(
     notes: List<Note>,
     folders: List<Folder>,
+    selectedNoteIds: Set<String> = emptySet(),
     onOpenNote: (Note) -> Unit,
+    onToggleSelectNote: (String) -> Unit = {},
     onToggleFavorite: (Note) -> Unit,
     onDeleteNote: (Note) -> Unit,
     onDuplicateNote: (Note) -> Unit,
+    onMoveNote: (Note) -> Unit = {},
+    onExportNote: (Note) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val folderMap = folders.associateBy { it.id }
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()) }
+    val isMultiSelectMode = selectedNoteIds.isNotEmpty()
 
     LazyColumn(
         modifier = modifier
@@ -75,6 +84,7 @@ fun NotesListScreen(
     ) {
         items(notes, key = { it.id }) { note ->
             val folder = note.folderId?.let { folderMap[it] }
+            val isSelected = selectedNoteIds.contains(note.id)
             var menuExpanded by remember { mutableStateOf(false) }
 
             Card(
@@ -82,15 +92,28 @@ fun NotesListScreen(
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
                     .clip(RoundedCornerShape(12.dp))
+                    .then(
+                        if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                        else Modifier
+                    )
                     .combinedClickable(
-                        onClick = { onOpenNote(note) },
-                        onLongClick = { menuExpanded = true }
+                        onClick = {
+                            if (isMultiSelectMode) {
+                                onToggleSelectNote(note.id)
+                            } else {
+                                onOpenNote(note)
+                            }
+                        },
+                        onLongClick = {
+                            onToggleSelectNote(note.id)
+                        }
                     ),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    else MaterialTheme.colorScheme.surface
                 ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 3.dp else 1.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -98,19 +121,36 @@ fun NotesListScreen(
                         .padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Article,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    if (isMultiSelectMode) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isSelected) Icons.Default.Check else Icons.Default.RadioButtonUnchecked,
+                                contentDescription = null,
+                                tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Article,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -121,7 +161,7 @@ fun NotesListScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = note.title,
+                                text = note.title.ifBlank { "Untitled" },
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
@@ -171,51 +211,69 @@ fun NotesListScreen(
                         }
                     }
 
-                    IconButton(
-                        onClick = { onToggleFavorite(note) },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (note.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = "Favorite",
-                            tint = if (note.isFavorite) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Box {
+                    if (!isMultiSelectMode) {
                         IconButton(
-                            onClick = { menuExpanded = true },
+                            onClick = { onToggleFavorite(note) },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Options",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
+                                imageVector = if (note.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = "Favorite",
+                                tint = if (note.isFavorite) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(20.dp)
                             )
                         }
 
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Duplicate") },
-                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                                onClick = {
-                                    menuExpanded = false
-                                    onDuplicateNote(note)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Move to Trash", color = MaterialTheme.colorScheme.error) },
-                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                                onClick = {
-                                    menuExpanded = false
-                                    onDeleteNote(note)
-                                }
-                            )
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Options",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Export Note") },
+                                    leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onExportNote(note)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move to Folder") },
+                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onMoveNote(note)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Duplicate Note") },
+                                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onDuplicateNote(note)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move to Trash", color = MaterialTheme.colorScheme.error) },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onDeleteNote(note)
+                                    }
+                                )
+                            }
                         }
                     }
                 }

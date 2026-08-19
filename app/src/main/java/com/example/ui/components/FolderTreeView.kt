@@ -48,6 +48,7 @@ import com.example.domain.model.Folder
 fun FolderTreeView(
     folders: List<Folder>,
     selectedFolderId: String?,
+    showItemCounts: Boolean = true,
     onSelectFolder: (String?) -> Unit,
     onCreateSubfolder: (parentId: String) -> Unit,
     onCreateNoteInFolder: (folderId: String) -> Unit,
@@ -60,26 +61,13 @@ fun FolderTreeView(
     val childrenMap = folders.groupBy { it.parentId }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        // "All Notes" root option
-        FolderItemRow(
-            name = "All Notes",
-            icon = Icons.Default.FolderOpen,
-            level = 0,
-            isSelected = selectedFolderId == null,
-            noteCount = folders.sumOf { it.noteCount },
-            hasChildren = false,
-            isExpanded = true,
-            onToggleExpand = {},
-            onClick = { onSelectFolder(null) },
-            actionsContent = null
-        )
-
         rootFolders.forEach { folder ->
             RenderFolderNode(
                 folder = folder,
-                level = 1,
+                level = 0,
                 childrenMap = childrenMap,
                 selectedFolderId = selectedFolderId,
+                showItemCounts = showItemCounts,
                 onSelectFolder = onSelectFolder,
                 onCreateSubfolder = onCreateSubfolder,
                 onCreateNoteInFolder = onCreateNoteInFolder,
@@ -97,6 +85,7 @@ private fun RenderFolderNode(
     level: Int,
     childrenMap: Map<String?, List<Folder>>,
     selectedFolderId: String?,
+    showItemCounts: Boolean,
     onSelectFolder: (String?) -> Unit,
     onCreateSubfolder: (parentId: String) -> Unit,
     onCreateNoteInFolder: (folderId: String) -> Unit,
@@ -113,6 +102,7 @@ private fun RenderFolderNode(
         level = level,
         isSelected = selectedFolderId == folder.id,
         noteCount = folder.noteCount,
+        showItemCounts = showItemCounts,
         hasChildren = hasChildren,
         isExpanded = folder.isExpanded,
         onToggleExpand = { onToggleExpand(folder.id) },
@@ -135,6 +125,7 @@ private fun RenderFolderNode(
                 level = level + 1,
                 childrenMap = childrenMap,
                 selectedFolderId = selectedFolderId,
+                showItemCounts = showItemCounts,
                 onSelectFolder = onSelectFolder,
                 onCreateSubfolder = onCreateSubfolder,
                 onCreateNoteInFolder = onCreateNoteInFolder,
@@ -153,6 +144,7 @@ private fun FolderItemRow(
     level: Int,
     isSelected: Boolean,
     noteCount: Int,
+    showItemCounts: Boolean,
     hasChildren: Boolean,
     isExpanded: Boolean,
     onToggleExpand: () -> Unit,
@@ -181,7 +173,7 @@ private fun FolderItemRow(
         if (hasChildren) {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(22.dp)
                     .clip(CircleShape)
                     .clickable { onToggleExpand() },
                 contentAlignment = Alignment.Center
@@ -194,7 +186,7 @@ private fun FolderItemRow(
                 )
             }
         } else {
-            Spacer(modifier = Modifier.width(20.dp))
+            Spacer(modifier = Modifier.width(22.dp))
         }
 
         Spacer(modifier = Modifier.width(4.dp))
@@ -218,7 +210,7 @@ private fun FolderItemRow(
             modifier = Modifier.weight(1f)
         )
 
-        if (noteCount > 0) {
+        if (showItemCounts && noteCount > 0) {
             Surface(
                 color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(10.dp),

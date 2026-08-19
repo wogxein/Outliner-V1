@@ -3,18 +3,14 @@ package com.example.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,30 +18,30 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileMove
-import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -68,6 +64,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -87,28 +84,37 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.Folder
+import com.example.domain.model.Note
+import com.example.ui.components.AiNoteAssistantSheet
 import com.example.ui.components.BreadcrumbsBar
 import com.example.ui.components.ColorPickerSheet
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FolderTreeView
 import com.example.ui.components.LinkInputDialog
+import com.example.ui.components.MeaningPopoverDialog
 import com.example.ui.components.OutlinerItemRow
 import com.example.ui.components.OutlinerToolbar
 import com.example.ui.components.SearchDialog
 import com.example.ui.components.SimpleInputDialog
+import com.example.ui.screens.AiResearchScreen
+import com.example.ui.theme.AppDensity
 import com.example.ui.viewmodel.AppView
 import com.example.ui.viewmodel.OutlinerViewModel
 import kotlinx.coroutines.launch
-import java.io.OutputStreamWriter
+import java.text.NumberFormat
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,9 +134,17 @@ fun MainOutlinerScreen(
     val breadcrumbs by viewModel.breadcrumbs.collectAsState()
     val focusedRootId by viewModel.focusedRootId.collectAsState()
     val selectedItemIds by viewModel.selectedItemIds.collectAsState()
+    val selectedNoteIds by viewModel.selectedNoteIds.collectAsState()
     val activeEditingItemId by viewModel.activeEditingItemId.collectAsState()
     val folders by viewModel.folders.collectAsState()
     val notes by viewModel.notes.collectAsState()
+
+    // Sidebar and interface preferences
+    val showFavoritesInSidebar by viewModel.showFavoritesInSidebar.collectAsState()
+    val showRecentInSidebar by viewModel.showRecentInSidebar.collectAsState()
+    val showTrashInSidebar by viewModel.showTrashInSidebar.collectAsState()
+    val showItemCounts by viewModel.showItemCounts.collectAsState()
+    val appDensityName by viewModel.appDensity.collectAsState()
 
     val canUndo by viewModel.canUndo.collectAsState()
     val canRedo by viewModel.canRedo.collectAsState()
@@ -145,8 +159,34 @@ fun MainOutlinerScreen(
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var parentFolderForNewDialog by remember { mutableStateOf<String?>(null) }
     var showRenameFolderDialog by remember { mutableStateOf<Folder?>(null) }
-    var showMoveNoteDialog by remember { mutableStateOf(false) }
+    var noteToMove by remember { mutableStateOf<Note?>(null) }
+    var showBatchMoveFolderDialog by remember { mutableStateOf(false) }
+    var noteToExport by remember { mutableStateOf<Note?>(null) }
     var showExportDialog by remember { mutableStateOf(false) }
+    var meaningPopoverText by remember { mutableStateOf<String?>(null) }
+
+    // Title focus requester for auto-focusing on note opening
+    val titleFocusRequester = remember { FocusRequester() }
+
+    // Android back navigation handler
+    BackHandler(enabled = drawerState.isOpen || selectedNoteIds.isNotEmpty() || currentView !is AppView.AllNotes) {
+        when {
+            drawerState.isOpen -> scope.launch { drawerState.close() }
+            selectedNoteIds.isNotEmpty() -> viewModel.clearNoteSelection()
+            else -> viewModel.navigateBack()
+        }
+    }
+
+    // Auto-focus title if newly opened note has empty or placeholder title
+    LaunchedEffect(activeNote?.id) {
+        if (activeNote != null && (activeNote?.title.isNullOrBlank() || activeNote?.title == "Untitled" || activeNote?.title == "New Note")) {
+            try {
+                titleFocusRequester.requestFocus()
+            } catch (e: Exception) {
+                // Focus requester not attached yet
+            }
+        }
+    }
 
     // User message toasts / snackbar
     LaunchedEffect(Unit) {
@@ -156,6 +196,12 @@ fun MainOutlinerScreen(
     }
 
     val activeEditingItem = outlineItems.find { it.id == activeEditingItemId }
+
+    val rowVerticalPadding = when (appDensityName) {
+        AppDensity.COMPACT.name -> 2.dp
+        AppDensity.COZY.name -> 5.dp
+        else -> 8.dp
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -209,9 +255,11 @@ fun MainOutlinerScreen(
 
                     // Primary Navigation Items
                     NavigationDrawerItem(
-                        label = { Text("All Notes (${notes.size})") },
+                        label = {
+                            Text(if (showItemCounts) "All Notes (${notes.size})" else "All Notes")
+                        },
                         icon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-                        selected = currentView is AppView.AllNotes || currentView is AppView.Editor,
+                        selected = currentView is AppView.AllNotes,
                         onClick = {
                             viewModel.navigateTo(AppView.AllNotes)
                             scope.launch { drawerState.close() }
@@ -220,34 +268,51 @@ fun MainOutlinerScreen(
                     )
 
                     NavigationDrawerItem(
-                        label = { Text("Favorites") },
-                        icon = { Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFF59E0B)) },
-                        selected = currentView is AppView.Favorites,
+                        label = { Text("AI Web Research") },
+                        icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                        selected = currentView is AppView.AiResearch,
                         onClick = {
-                            viewModel.navigateTo(AppView.Favorites)
+                            viewModel.openAiResearch()
                             scope.launch { drawerState.close() }
-                        }
+                        },
+                        colors = NavigationDrawerItemDefaults.colors()
                     )
 
-                    NavigationDrawerItem(
-                        label = { Text("Recent") },
-                        icon = { Icon(Icons.Default.MoreVert, contentDescription = null) },
-                        selected = currentView is AppView.Recent,
-                        onClick = {
-                            viewModel.navigateTo(AppView.Recent)
-                            scope.launch { drawerState.close() }
-                        }
-                    )
+                    if (showFavoritesInSidebar) {
+                        NavigationDrawerItem(
+                            label = { Text("Favorites") },
+                            icon = { Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFF59E0B)) },
+                            selected = currentView is AppView.Favorites,
+                            onClick = {
+                                viewModel.navigateTo(AppView.Favorites)
+                                scope.launch { drawerState.close() }
+                            }
+                        )
+                    }
 
-                    NavigationDrawerItem(
-                        label = { Text("Trash") },
-                        icon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                        selected = currentView is AppView.Trash,
-                        onClick = {
-                            viewModel.navigateTo(AppView.Trash)
-                            scope.launch { drawerState.close() }
-                        }
-                    )
+                    if (showRecentInSidebar) {
+                        NavigationDrawerItem(
+                            label = { Text("Recent") },
+                            icon = { Icon(Icons.Default.MoreVert, contentDescription = null) },
+                            selected = currentView is AppView.Recent,
+                            onClick = {
+                                viewModel.navigateTo(AppView.Recent)
+                                scope.launch { drawerState.close() }
+                            }
+                        )
+                    }
+
+                    if (showTrashInSidebar) {
+                        NavigationDrawerItem(
+                            label = { Text("Trash") },
+                            icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                            selected = currentView is AppView.Trash,
+                            onClick = {
+                                viewModel.navigateTo(AppView.Trash)
+                                scope.launch { drawerState.close() }
+                            }
+                        )
+                    }
 
                     NavigationDrawerItem(
                         label = { Text("Settings & Backup") },
@@ -302,6 +367,7 @@ fun MainOutlinerScreen(
                                     is AppView.FolderView -> (currentView as AppView.FolderView).folderId
                                     else -> null
                                 },
+                                showItemCounts = showItemCounts,
                                 onSelectFolder = { folderId ->
                                     if (folderId == null) {
                                         viewModel.navigateTo(AppView.AllNotes)
@@ -315,7 +381,7 @@ fun MainOutlinerScreen(
                                     showNewFolderDialog = true
                                 },
                                 onCreateNoteInFolder = { folderId ->
-                                    viewModel.createNote("New Note", folderId)
+                                    viewModel.createNote("Untitled", folderId)
                                     scope.launch { drawerState.close() }
                                 },
                                 onRenameFolder = { folder ->
@@ -353,43 +419,27 @@ fun MainOutlinerScreen(
             modifier = modifier.fillMaxSize(),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
+                val isMultiSelectMode = selectedNoteIds.isNotEmpty()
+
                 TopAppBar(
                     title = {
-                        if (currentView is AppView.Editor && activeNote != null) {
-                            var titleText by remember(activeNote?.id, activeNote?.title) {
-                                mutableStateOf(activeNote?.title ?: "")
-                            }
-                            BasicTextField(
-                                value = titleText,
-                                onValueChange = { newTitle ->
-                                    titleText = newTitle
-                                    viewModel.renameActiveNote(newTitle)
-                                },
-                                singleLine = true,
-                                textStyle = TextStyle(
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
+                        if (isMultiSelectMode) {
+                            Text(
+                                text = "${selectedNoteIds.size} selected",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        } else if (currentView is AppView.Editor && activeNote != null) {
+                            val folderName = activeNote?.folderId?.let { fId -> folders.find { it.id == fId }?.name }
+                            Text(
+                                text = if (folderName != null) "Folder: $folderName" else "Note Outline",
+                                style = TextStyle(
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 ),
-                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp, horizontal = 2.dp),
-                                decorationBox = { innerTextField ->
-                                    Box {
-                                        if (titleText.isEmpty()) {
-                                            Text(
-                                                text = "Untitled",
-                                                style = TextStyle(
-                                                    fontSize = 18.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                                )
-                                            )
-                                        }
-                                        innerTextField()
-                                    }
-                                }
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         } else {
                             Text(
@@ -411,87 +461,161 @@ fun MainOutlinerScreen(
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                        if (isMultiSelectMode) {
+                            IconButton(onClick = { viewModel.clearNoteSelection() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear Selection")
+                            }
+                        } else if (currentView !is AppView.AllNotes) {
+                            IconButton(onClick = { viewModel.navigateBack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            }
+                        } else {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Default.Menu, contentDescription = "Menu")
+                            }
                         }
                     },
                     actions = {
-                        // Search Button
-                        IconButton(onClick = { showSearchDialog = true }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
-                        }
-
-                        if (currentView is AppView.Editor && activeNote != null) {
-                            // Star Favorite
+                        if (isMultiSelectMode) {
+                            // Select All Action
                             IconButton(onClick = {
-                                viewModel.toggleNoteFavorite(activeNote!!.id, !activeNote!!.isFavorite)
+                                val currentNotes = when (currentView) {
+                                    is AppView.Favorites -> notes.filter { it.isFavorite }
+                                    is AppView.Recent -> notes.sortedByDescending { it.lastAccessedAt }
+                                    is AppView.FolderView -> {
+                                        val fId = (currentView as AppView.FolderView).folderId
+                                        notes.filter { it.folderId == fId }
+                                    }
+                                    else -> notes
+                                }
+                                viewModel.selectAllNotes(currentNotes.map { it.id })
                             }) {
-                                Icon(
-                                    imageVector = if (activeNote!!.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                                    contentDescription = "Favorite",
-                                    tint = if (activeNote!!.isFavorite) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurface
-                                )
+                                Icon(Icons.Default.SelectAll, contentDescription = "Select All")
                             }
 
-                            // More Actions
-                            var menuExpanded by remember { mutableStateOf(false) }
-                            Box {
-                                IconButton(onClick = { menuExpanded = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = "More")
+                            // Move Multiple Notes to Folder Action
+                            IconButton(onClick = { showBatchMoveFolderDialog = true }) {
+                                Icon(Icons.Default.DriveFileMove, contentDescription = "Move to Folder", tint = MaterialTheme.colorScheme.primary)
+                            }
+
+                            // Delete Selected Notes
+                            IconButton(onClick = { viewModel.deleteSelectedNotes() }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                            }
+                        } else {
+                            // Search Button
+                            IconButton(onClick = { showSearchDialog = true }) {
+                                Icon(Icons.Default.Search, contentDescription = "Search")
+                            }
+
+                            if (currentView is AppView.Editor && activeNote != null) {
+                                // Star Favorite
+                                IconButton(onClick = {
+                                    viewModel.toggleNoteFavorite(activeNote!!.id, !activeNote!!.isFavorite)
+                                }) {
+                                    Icon(
+                                        imageVector = if (activeNote!!.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                        contentDescription = "Favorite",
+                                        tint = if (activeNote!!.isFavorite) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurface
+                                    )
                                 }
 
-                                DropdownMenu(
-                                    expanded = menuExpanded,
-                                    onDismissRequest = { menuExpanded = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Export Note") },
-                                        leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            showExportDialog = true
-                                        }
+                                // AI Assistant Button immediately to the LEFT of three-dot menu
+                                IconButton(onClick = {
+                                    viewModel.toggleNoteAiPanel(true)
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "AI Note Assistant",
+                                        tint = MaterialTheme.colorScheme.primary
                                     )
-                                    DropdownMenuItem(
-                                        text = { Text("Move to Folder") },
-                                        leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            showMoveNoteDialog = true
+                                }
+
+                                // Right Sidebar / More Menu
+                                var menuExpanded by remember { mutableStateOf(false) }
+                                Box {
+                                    IconButton(onClick = { menuExpanded = true }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "More")
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = menuExpanded,
+                                        onDismissRequest = { menuExpanded = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Find Meaning") },
+                                            leadingIcon = { Icon(Icons.Default.AutoStories, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                val selText = activeEditingItem?.text?.trim() ?: ""
+                                                meaningPopoverText = selText
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Export Note") },
+                                            leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                noteToExport = activeNote
+                                                showExportDialog = true
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Move to Folder") },
+                                            leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                noteToMove = activeNote
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Duplicate Note") },
+                                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                viewModel.duplicateNote(activeNote!!.id)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Collapse All") },
+                                            leadingIcon = { Icon(Icons.Default.UnfoldLess, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                viewModel.collapseAll()
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Expand All") },
+                                            leadingIcon = { Icon(Icons.Default.UnfoldMore, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                viewModel.expandAll()
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Move to Trash", color = MaterialTheme.colorScheme.error) },
+                                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                viewModel.deleteNote(activeNote!!.id)
+                                            }
+                                        )
+
+                                        // Grey small word count line just beneath Move to Trash button
+                                        val totalWordCount = outlineItems.sumOf {
+                                            it.text.trim().split("\\s+".toRegex()).count { w -> w.isNotBlank() }
                                         }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Duplicate Note") },
-                                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            viewModel.duplicateNote(activeNote!!.id)
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Collapse All") },
-                                        leadingIcon = { Icon(Icons.Default.UnfoldLess, contentDescription = null) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            viewModel.collapseAll()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Expand All") },
-                                        leadingIcon = { Icon(Icons.Default.UnfoldMore, contentDescription = null) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            viewModel.expandAll()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Move to Trash", color = MaterialTheme.colorScheme.error) },
-                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            viewModel.deleteNote(activeNote!!.id)
-                                        }
-                                    )
+                                        val formattedWordCount = NumberFormat.getNumberInstance(Locale.US).format(totalWordCount) + " words"
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                        Text(
+                                            text = formattedWordCount,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -503,23 +627,49 @@ fun MainOutlinerScreen(
             },
             floatingActionButton = {
                 val isNotesOverview = currentView is AppView.AllNotes || currentView is AppView.FolderView || currentView is AppView.Favorites || currentView is AppView.Recent
-                if (isNotesOverview) {
-                    FloatingActionButton(
-                        onClick = {
-                            val fId = if (currentView is AppView.FolderView) (currentView as AppView.FolderView).folderId else null
-                            viewModel.createNote(folderId = fId)
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
-                        modifier = Modifier.size(56.dp)
+                if (isNotesOverview && selectedNoteIds.isEmpty()) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "New Note",
-                            modifier = Modifier.size(28.dp)
-                        )
+                        // AI Web Research FAB positioned just above (+) button
+                        SmallFloatingActionButton(
+                            onClick = {
+                                val fId = if (currentView is AppView.FolderView) (currentView as AppView.FolderView).folderId else null
+                                viewModel.openAiResearch(folderId = fId)
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "AI Web Research",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // (+) New Note Main FAB
+                        FloatingActionButton(
+                            onClick = {
+                                val fId = if (currentView is AppView.FolderView) (currentView as AppView.FolderView).folderId else null
+                                viewModel.createNote("Untitled", folderId = fId)
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
+                            modifier = Modifier.size(56.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "New Note",
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
                     }
                 }
             },
@@ -578,27 +728,97 @@ fun MainOutlinerScreen(
                                 // Zoom Breadcrumbs Header
                                 if (focusedRootId != null && breadcrumbs.isNotEmpty()) {
                                     BreadcrumbsBar(
-                                        noteTitle = activeNote?.title ?: "Note",
+                                        noteTitle = activeNote?.title?.ifBlank { "Untitled" } ?: "Note",
                                         breadcrumbs = breadcrumbs,
                                         onNavigateToRoot = { viewModel.unfocus() },
                                         onNavigateToItem = { id -> viewModel.focusOnItem(id) }
                                     )
                                 }
 
-                                if (flattenedTree.isEmpty()) {
-                                    EmptyStateView(
-                                        icon = Icons.Default.Checklist,
-                                        title = "Empty Note",
-                                        subtitle = "Tap '+ Add Item' below or start typing your first outline item.",
-                                        actionLabel = "+ Add First Item",
-                                        onActionClick = { viewModel.addSiblingItem(null) }
-                                    )
-                                } else {
-                                    LazyColumn(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(horizontal = 4.dp, vertical = 6.dp)
-                                    ) {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    // Note Title as the very first line / Heading 1 with grey line beneath
+                                    item {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            var titleText by remember(activeNote?.id) {
+                                                val raw = activeNote?.title ?: ""
+                                                mutableStateOf(if (raw == "Untitled" || raw == "New Note") "" else raw)
+                                            }
+
+                                            BasicTextField(
+                                                value = titleText,
+                                                onValueChange = { newTitle ->
+                                                    titleText = newTitle
+                                                    viewModel.renameActiveNote(newTitle.ifBlank { "Untitled" })
+                                                },
+                                                singleLine = true,
+                                                textStyle = TextStyle(
+                                                    fontSize = 24.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                ),
+                                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                                keyboardOptions = KeyboardOptions(
+                                                    imeAction = ImeAction.Next
+                                                ),
+                                                keyboardActions = KeyboardActions(
+                                                    onNext = {
+                                                        // Move focus to first item or create first item
+                                                        if (flattenedTree.isNotEmpty()) {
+                                                            viewModel.setActiveEditingItem(flattenedTree.first().item.id)
+                                                        } else {
+                                                            viewModel.addSiblingItem(null)
+                                                        }
+                                                    }
+                                                ),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .focusRequester(titleFocusRequester)
+                                                    .padding(vertical = 4.dp),
+                                                decorationBox = { innerTextField ->
+                                                    Box {
+                                                        if (titleText.isEmpty()) {
+                                                            Text(
+                                                                text = "Untitled",
+                                                                style = TextStyle(
+                                                                    fontSize = 24.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                                                )
+                                                            )
+                                                        }
+                                                        innerTextField()
+                                                    }
+                                                }
+                                            )
+
+                                            // Grey line beneath title
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
+                                                thickness = 1.dp,
+                                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                                            )
+                                        }
+                                    }
+
+                                    if (flattenedTree.isEmpty()) {
+                                        item {
+                                            EmptyStateView(
+                                                icon = Icons.Default.Checklist,
+                                                title = "Empty Note",
+                                                subtitle = "Tap '+ Add Item' below or start typing your first outline item.",
+                                                actionLabel = "+ Add First Item",
+                                                onActionClick = { viewModel.addSiblingItem(null) }
+                                            )
+                                        }
+                                    } else {
                                         items(
                                             items = flattenedTree,
                                             key = { it.item.id }
@@ -607,6 +827,7 @@ fun MainOutlinerScreen(
                                                 node = node,
                                                 isCurrentEditing = activeEditingItemId == node.item.id,
                                                 audioController = viewModel.audioController,
+                                                verticalPadding = rowVerticalPadding,
                                                 onTextChange = { newText ->
                                                     viewModel.updateItemText(node.item.id, newText)
                                                 },
@@ -653,6 +874,9 @@ fun MainOutlinerScreen(
                                                 onOpenLinkDialog = {
                                                     viewModel.setActiveEditingItem(node.item.id)
                                                     showLinkDialog = true
+                                                },
+                                                onLookupWord = { word ->
+                                                    meaningPopoverText = word
                                                 }
                                             )
                                         }
@@ -684,17 +908,24 @@ fun MainOutlinerScreen(
                                 actionLabel = "New Note",
                                 onActionClick = {
                                     val fId = if (currentView is AppView.FolderView) (currentView as AppView.FolderView).folderId else null
-                                    viewModel.createNote(folderId = fId)
+                                    viewModel.createNote("Untitled", folderId = fId)
                                 }
                             )
                         } else {
                             NotesListScreen(
                                 notes = displayedNotes,
                                 folders = folders,
+                                selectedNoteIds = selectedNoteIds,
                                 onOpenNote = { viewModel.openNote(it.id) },
+                                onToggleSelectNote = { noteId -> viewModel.toggleNoteSelection(noteId) },
                                 onToggleFavorite = { note -> viewModel.toggleNoteFavorite(note.id, !note.isFavorite) },
                                 onDeleteNote = { note -> viewModel.deleteNote(note.id) },
-                                onDuplicateNote = { note -> viewModel.duplicateNote(note.id) }
+                                onDuplicateNote = { note -> viewModel.duplicateNote(note.id) },
+                                onMoveNote = { note -> noteToMove = note },
+                                onExportNote = { note ->
+                                    noteToExport = note
+                                    showExportDialog = true
+                                }
                             )
                         }
                     }
@@ -704,12 +935,37 @@ fun MainOutlinerScreen(
                     is AppView.Settings -> {
                         SettingsScreen(viewModel = viewModel)
                     }
+                    is AppView.AiResearch -> {
+                        val aiView = currentView as AppView.AiResearch
+                        AiResearchScreen(
+                            viewModel = viewModel,
+                            folderId = aiView.folderId,
+                            noteId = aiView.noteId,
+                            onBack = { viewModel.navigateBack() }
+                        )
+                    }
                 }
             }
         }
     }
 
     // ================= MODALS & DIALOGS ================= //
+
+    // Floating Meaning Popover Dialog
+    if (meaningPopoverText != null) {
+        MeaningPopoverDialog(
+            initialText = meaningPopoverText ?: "",
+            onDismiss = { meaningPopoverText = null }
+        )
+    }
+
+    val isNoteAiPanelOpen by viewModel.isNoteAiPanelOpen.collectAsState()
+    if (isNoteAiPanelOpen) {
+        AiNoteAssistantSheet(
+            viewModel = viewModel,
+            onDismiss = { viewModel.toggleNoteAiPanel(false) }
+        )
+    }
 
     if (showSearchDialog) {
         SearchDialog(
@@ -778,27 +1034,44 @@ fun MainOutlinerScreen(
         )
     }
 
-    if (showMoveNoteDialog && activeNote != null) {
+    // Move single note
+    if (noteToMove != null) {
         MoveNoteDialog(
             folders = folders,
-            currentFolderId = activeNote!!.folderId,
+            currentFolderId = noteToMove!!.folderId,
             onSelectFolder = { folderId ->
-                viewModel.moveNoteToFolder(activeNote!!.id, folderId)
-                showMoveNoteDialog = false
+                viewModel.moveNoteToFolder(noteToMove!!.id, folderId)
+                noteToMove = null
             },
-            onDismiss = { showMoveNoteDialog = false }
+            onDismiss = { noteToMove = null }
         )
     }
 
-    if (showExportDialog && activeNote != null) {
+    // Move batch selected notes
+    if (showBatchMoveFolderDialog && selectedNoteIds.isNotEmpty()) {
+        MoveNoteDialog(
+            folders = folders,
+            currentFolderId = null,
+            onSelectFolder = { folderId ->
+                viewModel.moveSelectedNotesToFolder(folderId)
+                showBatchMoveFolderDialog = false
+            },
+            onDismiss = { showBatchMoveFolderDialog = false }
+        )
+    }
+
+    // Export note dialog
+    if (showExportDialog && noteToExport != null) {
+        val exportTarget = noteToExport!!
         ExportNoteDialog(
-            noteTitle = activeNote!!.title,
+            noteTitle = exportTarget.title.ifBlank { "Untitled" },
             onExportPlainText = {
                 val text = viewModel.getPlainTextExport()
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("Note Plain Text", text))
                 Toast.makeText(context, "Plain text copied to clipboard", Toast.LENGTH_SHORT).show()
                 showExportDialog = false
+                noteToExport = null
             },
             onExportOpml = {
                 val opml = viewModel.getOpmlExport()
@@ -806,8 +1079,12 @@ fun MainOutlinerScreen(
                 clipboard.setPrimaryClip(ClipData.newPlainText("Note OPML", opml))
                 Toast.makeText(context, "OPML XML copied to clipboard", Toast.LENGTH_SHORT).show()
                 showExportDialog = false
+                noteToExport = null
             },
-            onDismiss = { showExportDialog = false }
+            onDismiss = {
+                showExportDialog = false
+                noteToExport = null
+            }
         )
     }
 }
@@ -821,7 +1098,7 @@ private fun MoveNoteDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Move Note to Folder", fontWeight = FontWeight.Bold) },
+        title = { Text("Move to Folder", fontWeight = FontWeight.Bold) },
         text = {
             LazyColumn(modifier = Modifier.fillMaxWidth().height(240.dp)) {
                 item {
