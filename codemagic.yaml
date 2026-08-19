@@ -4,9 +4,6 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      android_sdk:
-        - build-tools-36.0.0
-        - platforms-android-36
       java: 21
     scripts:
       - name: Set up local properties
