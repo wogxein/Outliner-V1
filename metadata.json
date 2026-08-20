@@ -1,0 +1,8 @@
+{
+  "name": "Remix Outliner New",
+  "description": "Production-ready offline-first notes and hierarchical outliner app with rich text, tags, links, undo/redo, OPML, and database backup.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
